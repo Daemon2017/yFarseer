@@ -1,0 +1,8 @@
+.github/
+.ipynb_checkpoints/
+.idea/
+back/catboost_info
+*.csv
+*.json
+*.pth
+*.md
