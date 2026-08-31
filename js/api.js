@@ -1,7 +1,7 @@
 async function fetchPrediction(payload) {
   const url = `${CONFIG.API_BASE_URL}${CONFIG.ENDPOINTS.PREDICT}`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
   try {
     const response = await fetch(url, {
       method: 'POST',
