@@ -179,7 +179,7 @@ class GeneticEmbeddingMLP(nn.Module):
         self.embeddings = nn.ModuleList(
             [nn.Embedding(num_embeddings=max_allele_val, embedding_dim=embedding_dim, padding_idx=0) for _ in
              range(num_str_markers)])
-        total_input_dim = num_str_markers * (embedding_dim + 1)
+        total_input_dim = num_str_markers * (embedding_dim + 4)
         self.input_layer = nn.Sequential(
             nn.Linear(total_input_dim, config.LAYER_DIM),
             nn.BatchNorm1d(config.LAYER_DIM),
@@ -215,8 +215,13 @@ class GeneticEmbeddingMLP(nn.Module):
         embedded_list = []
         for i in range(self.num_str_markers):
             emb = self.embeddings[i](features[:, i])
-            continuous_val = (features[:, i].float() / float(self.max_allele_val)).unsqueeze(1)
-            emb_combined = torch.cat([emb, continuous_val], dim=1)
+            x_val = (features[:, i].float() / float(self.max_allele_val)).unsqueeze(1)
+            sin_1 = torch.sin(x_val * 1.0)
+            cos_1 = torch.cos(x_val * 1.0)
+            sin_2 = torch.sin(x_val * 10.0)
+            cos_2 = torch.cos(x_val * 10.0)
+            geom_signal = torch.cat([sin_1, cos_1, sin_2, cos_2], dim=1)
+            emb_combined = torch.cat([emb, geom_signal], dim=1)
             emb_combined = emb_combined * masks[:, i].unsqueeze(1)
             embedded_list.append(emb_combined)
         x_emb = torch.cat(embedded_list, dim=1)

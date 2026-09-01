@@ -207,6 +207,7 @@ def process_sample_dict(sample_dict):
 
 @app.route('/predict', methods=['POST'])
 def predict_snp():
+    print(f'Processing POST /predict...')
     req_json = request.get_json(silent=True)
     if not req_json or 'haplotype' not in req_json:
         return jsonify({'status': 'error', 'message': 'Некорректный или пустой JSON запрос'}), 400
