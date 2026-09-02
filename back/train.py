@@ -128,4 +128,3 @@ if __name__ == '__main__':
             best_model_path = os.path.join(config.MODEL_DIR, "model_best_emr.pth")
             torch.save(model.state_dict(), best_model_path)
             print(f"  --> Сохранена новая лучшая модель с VALID EMR (111 STR): {best_val_emr:.4f}")
-    torch.save(model.state_dict(), os.path.join(config.MODEL_DIR, "model_final.pth"))

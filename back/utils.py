@@ -104,7 +104,9 @@ def load_and_transform_dataset(only_complete=True):
                      low_memory=False, encoding='utf-8')
     df = df.dropna(subset=['Haplogroup'])
     df = df[~df['Haplogroup'].isin(['-'])]
-    df = df[~df['Haplogroup'].isin(config.PREDICTED_SNPS)]
+    haplogroup_counts = df['Haplogroup'].value_counts()
+    wgs_haplogroups = haplogroup_counts[haplogroup_counts <= 100].index
+    df = df[df['Haplogroup'].isin(wgs_haplogroups)]
     df['Haplogroup'] = df['Haplogroup'].astype(str).str.strip()
     transformed = {}
     for col in config.EXTENDED_STR_COLS:
