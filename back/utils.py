@@ -105,7 +105,7 @@ def load_and_transform_dataset(only_complete=True):
     df = df.dropna(subset=['Haplogroup'])
     df = df[~df['Haplogroup'].isin(['-'])]
     haplogroup_counts = df['Haplogroup'].value_counts()
-    wgs_haplogroups = haplogroup_counts[haplogroup_counts <= 100].index
+    wgs_haplogroups = haplogroup_counts[haplogroup_counts <= 25].index
     df = df[df['Haplogroup'].isin(wgs_haplogroups)]
     df['Haplogroup'] = df['Haplogroup'].astype(str).str.strip()
     transformed = {}
