@@ -113,14 +113,18 @@ if __name__ == '__main__':
             f1 = 2 * (p * r) / (p + r + 1e-8)
             emr = train_stats[length]["exact"] / (train_stats[length]["count"] + 1e-8)
             train_report += f" [{length} STR -> F1: {f1:.3f}, EMR: {emr:.3f}]"
-        val_loss, val_f1, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE)
         train_b_loss = criterion.latest_base_loss
         train_h_loss = criterion.latest_hierarchy_loss
         train_s_loss = criterion.latest_sibling_loss
+        val_loss, val_f1, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE)
+        val_b_loss = criterion.latest_base_loss
+        val_h_loss = criterion.latest_hierarchy_loss
+        val_s_loss = criterion.latest_sibling_loss
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
         print(f"Epoch {epoch + 1:02d} | LR: {current_lr:.6f} | Time: {epoch_time:.2f}s | "
-              f"Train Loss: {train_loss:.4f} (B: {train_b_loss:.4f}, H: {train_h_loss:.4f}, S: {train_s_loss:.4f}) | Valid Loss: {val_loss:.4f}\n"
+              f"Train Loss: {train_loss:.4f} (B: {train_b_loss:.4f}, H: {train_h_loss:.4f}, S: {train_s_loss:.4f}) | "
+              f"Valid Loss: {val_loss:.4f} (B: {val_b_loss:.4f}, H: {val_h_loss:.4f}, S: {val_s_loss:.4f})\n"
               f"  TRAIN GROUPS ->{train_report}\n"
               f"  VALID GROUPS ->{val_report}")
         if val_emr > best_val_emr:
