@@ -48,7 +48,7 @@ def evaluate_model(model, loader, criterion, device):
     total_loss = 0.0
     total_samples = 0
     lengths_standards = [12, 25, 37, 67, 111]
-    stats = {l: {"tp": 0, "fp": 0, "fn": 0, "exact": 0, "count": 0} for l in lengths_standards}
+    stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
     with torch.no_grad():
         for inputs, labels, masks in loader:
             inputs, labels, masks = inputs.to(device), labels.to(device), masks.to(device)
@@ -71,31 +71,28 @@ def evaluate_model(model, loader, criterion, device):
                 preds = (torch.sigmoid(outputs_sub) > 0.5).float()
                 active_preds = preds * masks
                 active_labels = labels * masks
-                stats[length]["tp"] += ((active_preds == 1.0) & (active_labels == 1.0)).sum().item()
-                stats[length]["fp"] += ((active_preds == 1.0) & (active_labels == 0.0)).sum().item()
-                stats[length]["fn"] += ((active_preds == 0.0) & (active_labels == 1.0)).sum().item()
-                sample_errors = ((active_preds != active_labels) * masks).sum(dim=1)
-                stats[length]["exact"] += (sample_errors == 0).sum().item()
+                fps = ((active_preds == 1.0) & (active_labels == 0.0)).sum(dim=1)
+                fns = ((active_preds == 0.0) & (active_labels == 1.0)).sum(dim=1)
+                exact_mask = (fps == 0) & (fns == 0)
+                under_mask = (fps == 0) & (fns > 0)
+                over_mask = (fps > 0) & (fns == 0)
+                false_branch_mask = (fps > 0) & (fns > 0)
+                stats[length]["exact"] += exact_mask.sum().item()
+                stats[length]["under"] += under_mask.sum().item()
+                stats[length]["over"] += over_mask.sum().item()
+                stats[length]["false_branch"] += false_branch_mask.sum().item()
                 stats[length]["count"] += batch_size
     mean_loss = total_loss / (total_samples + 1e-8)
-    tp_orig = stats[111]["tp"]
-    fp_orig = stats[111]["fp"]
-    fn_orig = stats[111]["fn"]
-    p_orig = tp_orig / (tp_orig + fp_orig + 1e-8)
-    r_orig = tp_orig / (tp_orig + fn_orig + 1e-8)
-    val_f1 = 2 * (p_orig * r_orig) / (p_orig + r_orig + 1e-8)
     val_emr = stats[111]["exact"] / (stats[111]["count"] + 1e-8)
     report_str = ""
     for length in lengths_standards:
-        tp = stats[length]["tp"]
-        fp = stats[length]["fp"]
-        fn = stats[length]["fn"]
-        precision = tp / (tp + fp + 1e-8)
-        recall = tp / (tp + fn + 1e-8)
-        f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
-        emr = stats[length]["exact"] / (stats[length]["count"] + 1e-8)
-        report_str += f" [{length} STR -> F1: {f1:.4f}, EMR: {emr:.4f}]"
-    return mean_loss, val_f1, val_emr, report_str
+        c = stats[length]["count"] + 1e-8
+        emr = stats[length]["exact"] / c
+        under = stats[length]["under"] / c
+        over = stats[length]["over"] / c
+        fb = stats[length]["false_branch"] / c
+        report_str += f" [{length} STR -> EMR: {emr:.3f}, Und: {under:.3f}, Ovr: {over:.3f}, Fls: {fb:.3f}]"
+    return mean_loss, val_emr, report_str
 
 
 def load_and_transform_dataset(only_complete=True):

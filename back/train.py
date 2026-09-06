@@ -63,7 +63,7 @@ if __name__ == '__main__':
         model.train()
         train_loss = 0.0
         total_train_samples = 0
-        train_stats = {l: {"tp": 0, "fp": 0, "fn": 0, "exact": 0, "count": 0} for l in lengths_standards}
+        train_stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
         for inputs, targets, masks in train_loader:
             inputs, targets, masks = inputs.to(config.DEVICE), targets.to(config.DEVICE), masks.to(config.DEVICE)
             optimizer.zero_grad()
@@ -78,45 +78,41 @@ if __name__ == '__main__':
             preds = (torch.sigmoid(outputs) > 0.5).float()
             active_preds = preds * masks
             active_targets = targets * masks
-            for i in range(batch_size):
-                mask_vals = inputs[i, num_features:]
-                sub_length = int(mask_vals.sum().item())
-                if sub_length <= 12:
-                    sub_length = 12
-                elif sub_length <= 25:
-                    sub_length = 25
-                elif sub_length <= 37:
-                    sub_length = 37
-                elif sub_length <= 67:
-                    sub_length = 67
-                else:
-                    sub_length = 111
-                row_tp = ((active_preds[i] == 1.0) & (active_targets[i] == 1.0)).sum().item()
-                row_fp = ((active_preds[i] == 1.0) & (active_targets[i] == 0.0)).sum().item()
-                row_fn = ((active_preds[i] == 0.0) & (active_targets[i] == 1.0)).sum().item()
-                row_error = ((active_preds[i] != active_targets[i]) * masks[i]).sum().item()
-                train_stats[sub_length]["tp"] += row_tp
-                train_stats[sub_length]["fp"] += row_fp
-                train_stats[sub_length]["fn"] += row_fn
-                if row_error == 0:
-                    train_stats[sub_length]["exact"] += 1
-                train_stats[sub_length]["count"] += 1
+            fps = ((active_preds == 1.0) & (active_targets == 0.0)).sum(dim=1)
+            fns = ((active_preds == 0.0) & (active_targets == 1.0)).sum(dim=1)
+            mask_vals = inputs[:, num_features:]
+            sample_lengths = mask_vals.sum(dim=1).long()
+            assigned_standards = torch.zeros_like(sample_lengths)
+            assigned_standards = torch.where(sample_lengths <= 12, 12, assigned_standards)
+            assigned_standards = torch.where((sample_lengths > 12) & (sample_lengths <= 25), 25, assigned_standards)
+            assigned_standards = torch.where((sample_lengths > 25) & (sample_lengths <= 37), 37, assigned_standards)
+            assigned_standards = torch.where((sample_lengths > 37) & (sample_lengths <= 67), 67, assigned_standards)
+            assigned_standards = torch.where(sample_lengths > 67, 111, assigned_standards)
+            for length in lengths_standards:
+                length_mask = (assigned_standards == length)
+                if not length_mask.any():
+                    continue
+                sub_fps = fps[length_mask]
+                sub_fns = fns[length_mask]
+                train_stats[length]["exact"] += ((sub_fps == 0) & (sub_fns == 0)).sum().item()
+                train_stats[length]["under"] += ((sub_fps == 0) & (sub_fns > 0)).sum().item()
+                train_stats[length]["over"] += ((sub_fps > 0) & (sub_fns == 0)).sum().item()
+                train_stats[length]["false_branch"] += ((sub_fps > 0) & (sub_fns > 0)).sum().item()
+                train_stats[length]["count"] += length_mask.sum().item()
         epoch_time = time.time() - start_time
         train_loss /= total_train_samples
         train_report = ""
         for length in lengths_standards:
-            tp = train_stats[length]["tp"]
-            fp = train_stats[length]["fp"]
-            fn = train_stats[length]["fn"]
-            p = tp / (tp + fp + 1e-8)
-            r = tp / (tp + fn + 1e-8)
-            f1 = 2 * (p * r) / (p + r + 1e-8)
-            emr = train_stats[length]["exact"] / (train_stats[length]["count"] + 1e-8)
-            train_report += f" [{length} STR -> F1: {f1:.3f}, EMR: {emr:.3f}]"
+            c = train_stats[length]["count"] + 1e-8
+            emr = train_stats[length]["exact"] / c
+            under = train_stats[length]["under"] / c
+            over = train_stats[length]["over"] / c
+            fb = train_stats[length]["false_branch"] / c
+            train_report += f" [{length} STR -> EMR: {emr:.3f}, Und: {under:.3f}, Ovr: {over:.3f}, Fls: {fb:.3f}]"
         train_b_loss = criterion.latest_base_loss
         train_h_loss = criterion.latest_hierarchy_loss
         train_s_loss = criterion.latest_sibling_loss
-        val_loss, val_f1, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE)
+        val_loss, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE)
         val_b_loss = criterion.latest_base_loss
         val_h_loss = criterion.latest_hierarchy_loss
         val_s_loss = criterion.latest_sibling_loss
