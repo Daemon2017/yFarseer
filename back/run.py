@@ -28,14 +28,20 @@ def hierarchical_predict(model, x, parent_indices, level_tensor, max_level):
         root_indices = [idx for idx, lvl in enumerate(levels_list) if lvl == 0]
         if root_indices:
             for b in range(batch_size):
-                best_root_idx = root_indices[0]
-                max_val = probs[b, best_root_idx]
-                for r_idx in root_indices:
-                    if probs[b, r_idx] > max_val:
-                        max_val = probs[b, r_idx]
-                        best_root_idx = r_idx
-                if max_val >= 0.5:
-                    final_active_mask[b, best_root_idx] = True
+                if len(root_indices) == 1:
+                    best_root_idx = root_indices[0]
+                    if probs[b, best_root_idx] >= 0.5:
+                        final_active_mask[b, best_root_idx] = True
+                else:
+                    root_probs = [probs[b, r_idx].item() for r_idx in root_indices]
+                    max_idx = np.argmax(root_probs)
+                    best_root_idx = root_indices[max_idx]
+                    leader_prob = root_probs[max_idx]
+                    if leader_prob >= 0.5:
+                        sorted_probs = sorted(root_probs, reverse=True)
+                        margin = sorted_probs[0] - sorted_probs[1]
+                        if margin >= 0.15:
+                            final_active_mask[b, best_root_idx] = True
         for lvl in range(1, max_level + 1):
             lvl_indices = [idx for idx, l in enumerate(levels_list) if l == lvl]
             if not lvl_indices:
@@ -55,17 +61,26 @@ def hierarchical_predict(model, x, parent_indices, level_tensor, max_level):
                         parents_groups[p_idx] = []
                     parents_groups[p_idx].append(idx)
                 for p_idx, siblings in parents_groups.items():
-                    best_sib_idx = siblings[0]
-                    max_val = probs[b, best_sib_idx]
-                    for sib_idx in siblings:
-                        if probs[b, sib_idx] > max_val:
-                            max_val = probs[b, sib_idx]
-                            best_sib_idx = sib_idx
                     parent_prob = probs[b, p_idx].item()
-                    adjusted_prob = min(max_val.item(), parent_prob)
-                    probs[b, best_sib_idx] = adjusted_prob
-                    if adjusted_prob >= 0.5:
-                        final_active_mask[b, best_sib_idx] = True
+                    if len(siblings) == 1:
+                        sib_idx = siblings[0]
+                        max_val = probs[b, sib_idx]
+                        adjusted_prob = min(max_val.item(), parent_prob)
+                        probs[b, sib_idx] = adjusted_prob
+                        if adjusted_prob >= 0.5:
+                            final_active_mask[b, sib_idx] = True
+                    else:
+                        sib_probs = [probs[b, s_idx].item() for s_idx in siblings]
+                        max_idx = np.argmax(sib_probs)
+                        best_sib_idx = siblings[max_idx]
+                        leader_prob = sib_probs[max_idx]
+                        adjusted_prob = min(leader_prob, parent_prob)
+                        probs[b, best_sib_idx] = adjusted_prob
+                        if adjusted_prob >= 0.5:
+                            sorted_probs = sorted(sib_probs, reverse=True)
+                            margin = sorted_probs[0] - sorted_probs[1]
+                            if margin >= 0.15:
+                                final_active_mask[b, best_sib_idx] = True
         probs = torch.where(final_active_mask, probs, torch.tensor(0.0, device=probs.device))
     return probs
 

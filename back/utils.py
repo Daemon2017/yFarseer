@@ -43,12 +43,17 @@ def build_matrices(df):
     return features.astype(np.float32), masks
 
 
-def evaluate_model(model, loader, criterion, device):
+def evaluate_model(model, loader, criterion, device, parent_indices):
     model.eval()
     total_loss = 0.0
     total_samples = 0
     lengths_standards = [12, 25, 37, 67, 111]
     stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
+    num_snps = len(parent_indices)
+    children_map = {i: [] for i in range(-1, num_snps)}
+    for child_idx, p_idx in enumerate(parent_indices):
+        children_map[p_idx].append(child_idx)
+    roots = children_map[-1]
     with torch.no_grad():
         for inputs, labels, masks in loader:
             inputs, labels, masks = inputs.to(device), labels.to(device), masks.to(device)
@@ -60,6 +65,8 @@ def evaluate_model(model, loader, criterion, device):
             num_features = inputs.size(1) // 2
             base_feat = inputs[:, :num_features]
             base_mask = inputs[:, num_features:]
+            np_labels = labels.cpu().numpy()
+            np_masks = masks.cpu().numpy()
             for length in lengths_standards:
                 feat_sub = base_feat.clone()
                 mask_sub = base_mask.clone()
@@ -68,19 +75,45 @@ def evaluate_model(model, loader, criterion, device):
                     mask_sub[:, length:] = 0.0
                 inputs_sub = torch.hstack([feat_sub, mask_sub])
                 outputs_sub = model(inputs_sub)
-                preds = (torch.sigmoid(outputs_sub) > 0.5).float()
-                active_preds = preds * masks
-                active_labels = labels * masks
-                fps = ((active_preds == 1.0) & (active_labels == 0.0)).sum(dim=1)
-                fns = ((active_preds == 0.0) & (active_labels == 1.0)).sum(dim=1)
-                exact_mask = (fps == 0) & (fns == 0)
-                under_mask = (fps == 0) & (fns > 0)
-                over_mask = (fps > 0) & (fns == 0)
-                false_branch_mask = (fps > 0) & (fns > 0)
-                stats[length]["exact"] += exact_mask.sum().item()
-                stats[length]["under"] += under_mask.sum().item()
-                stats[length]["over"] += over_mask.sum().item()
-                stats[length]["false_branch"] += false_branch_mask.sum().item()
+                probs_sub = torch.sigmoid(outputs_sub).cpu().numpy()
+                phylo_preds = np.zeros((batch_size, num_snps), dtype=np.float32)
+                for b in range(batch_size):
+                    sample_probs = probs_sub[b]
+                    active_nodes = []
+                    current_nodes = list(roots)
+                    while current_nodes:
+                        if len(current_nodes) == 1:
+                            node = current_nodes[0]
+                            if sample_probs[node] > 0.5:
+                                active_nodes.append(node)
+                                current_nodes = children_map[node]
+                            else:
+                                break
+                        else:
+                            node_probs = [sample_probs[n] for n in current_nodes]
+                            max_idx = np.argmax(node_probs)
+                            leader_node = current_nodes[max_idx]
+                            leader_prob = node_probs[max_idx]
+                            if leader_prob > 0.5:
+                                sorted_probs = sorted(node_probs, reverse=True)
+                                margin = sorted_probs[0] - sorted_probs[1]
+                                if margin >= 0.15:
+                                    active_nodes.append(leader_node)
+                                    current_nodes = children_map[leader_node]
+                                else:
+                                    break
+                            else:
+                                break
+                    if active_nodes:
+                        phylo_preds[b, active_nodes] = 1.0
+                active_preds = phylo_preds * np_masks
+                active_labels = np_labels * np_masks
+                fps = ((active_preds == 1.0) & (active_labels == 0.0)).sum(axis=1)
+                fns = ((active_preds == 0.0) & (active_labels == 1.0)).sum(axis=1)
+                stats[length]["exact"] += ((fps == 0) & (fns == 0)).sum()
+                stats[length]["under"] += ((fps == 0) & (fns > 0)).sum()
+                stats[length]["over"] += ((fps > 0) & (fns == 0)).sum()
+                stats[length]["false_branch"] += ((fps > 0) & (fns > 0)).sum()
                 stats[length]["count"] += batch_size
     mean_loss = total_loss / (total_samples + 1e-8)
     val_emr = stats[111]["exact"] / (stats[111]["count"] + 1e-8)

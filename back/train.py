@@ -112,7 +112,8 @@ if __name__ == '__main__':
         train_b_loss = criterion.latest_base_loss
         train_h_loss = criterion.latest_hierarchy_loss
         train_s_loss = criterion.latest_sibling_loss
-        val_loss, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE)
+        val_loss, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE,
+                                                             topo_manager.parent_indices)
         val_b_loss = criterion.latest_base_loss
         val_h_loss = criterion.latest_hierarchy_loss
         val_s_loss = criterion.latest_sibling_loss
