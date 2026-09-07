@@ -253,10 +253,11 @@ class MaskedBCELoss(nn.Module):
                 first_child_idx = np.where(sibling_matrix[g_idx] == 1.0)[0][0]
                 parent_idx = parent_indices[first_child_idx]
                 group_parents.append(parent_idx)
-            self.register_buffer("group_parents_tensor", torch.tensor(group_parents, dtype=torch.long))
+            group_levels = level_tensor[group_parents] if level_tensor is not None else torch.zeros(num_groups)
+            self.register_buffer("group_depth_weights", 1.0 + group_levels.float())
         else:
             self.register_buffer("sibling_matrix", torch.empty(0))
-            self.register_buffer("group_parents_tensor", torch.empty(0))
+            self.register_buffer("group_depth_weights", torch.empty(0))
 
     def forward(self, preds, targets, masks):
         loss = self.bce(preds, targets)
@@ -280,13 +281,17 @@ class MaskedBCELoss(nn.Module):
             violation_loss = torch.tensor(0.0, device=preds.device)
         sibling_loss = torch.tensor(0.0, device=preds.device)
         if self.sibling_matrix.numel() > 0 and self.sibling_matrix.size(0) > 0:
+            epsilon = 1e-8
+            group_masks = torch.matmul(masks, self.sibling_matrix.t()) > 0
             group_sums = torch.matmul(probs, self.sibling_matrix.t())
-            group_squares_sums = torch.matmul(probs ** 2, self.sibling_matrix.t())
-            pairwise_products = 0.5 * (group_sums ** 2 - group_squares_sums)
-            group_levels = self.level_tensor[self.group_parents_tensor]
-            depth_weights = 1.0 + group_levels.float()
-            weighted_pairwise = pairwise_products * depth_weights.unsqueeze(0)
-            sibling_loss = weighted_pairwise.mean()
+            group_targets = torch.matmul(targets, self.sibling_matrix.t())
+            norm_targets = group_targets / (group_targets.sum(dim=1, keepdim=True) + epsilon)
+            log_group_sums = torch.log(group_sums + epsilon)
+            raw_sibling_loss = - (log_group_sums * norm_targets)
+            weighted_sibling = raw_sibling_loss * self.group_depth_weights.unsqueeze(0)
+            masked_sibling = weighted_sibling * group_masks.float()
+            if group_masks.any():
+                sibling_loss = masked_sibling.sum() / (group_masks.sum() + epsilon)
         self.latest_base_loss = base_loss.item()
         self.latest_hierarchy_loss = (config.HIERARCHY_PENALTY_WEIGHT * violation_loss).item()
         self.latest_sibling_loss = (config.SIBLING_PENALTY_WEIGHT * sibling_loss).item()
