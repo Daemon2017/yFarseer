@@ -185,7 +185,8 @@ class GeneticEmbeddingMLP(nn.Module):
         self.input_layer = nn.Sequential(
             nn.Linear(total_input_dim, config.LAYER_DIM),
             nn.BatchNorm1d(config.LAYER_DIM),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Dropout(0.3)
         )
         self.hidden_layer = nn.Sequential(
             nn.Linear(config.LAYER_DIM + total_input_dim, config.LAYER_DIM * 2),
