@@ -179,6 +179,8 @@ class GeneticEmbeddingMLP(nn.Module):
         self.embeddings = nn.ModuleList(
             [nn.Embedding(num_embeddings=max_allele_val, embedding_dim=embedding_dim, padding_idx=0) for _ in
              range(num_str_markers)])
+        rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
+        self.register_buffer('mutation_rates', torch.tensor(rates, dtype=torch.float32).unsqueeze(0), persistent=False)
         total_input_dim = num_str_markers * (embedding_dim + 4)
         self.input_layer = nn.Sequential(
             nn.Linear(total_input_dim, config.LAYER_DIM),
@@ -216,10 +218,12 @@ class GeneticEmbeddingMLP(nn.Module):
         for i in range(self.num_str_markers):
             emb = self.embeddings[i](features[:, i])
             x_val = (features[:, i].float() / float(self.max_allele_val)).unsqueeze(1)
-            sin_1 = torch.sin(x_val * 1.0)
-            cos_1 = torch.cos(x_val * 1.0)
-            sin_2 = torch.sin(x_val * 10.0)
-            cos_2 = torch.cos(x_val * 10.0)
+            rate_modifier = self.mutation_rates[:, i].unsqueeze(1)
+            frequency_scale = 1.0 / (rate_modifier * 100.0 + 1e-5)
+            sin_1 = torch.sin(x_val * 0.5 * frequency_scale)
+            cos_1 = torch.cos(x_val * 0.5 * frequency_scale)
+            sin_2 = torch.sin(x_val * 2.5 * frequency_scale)
+            cos_2 = torch.cos(x_val * 2.5 * frequency_scale)
             geom_signal = torch.cat([sin_1, cos_1, sin_2, cos_2], dim=1)
             emb_combined = torch.cat([emb, geom_signal], dim=1)
             emb_combined = emb_combined * masks[:, i].unsqueeze(1)
