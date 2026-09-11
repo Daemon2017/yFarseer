@@ -1,3 +1,4 @@
+import json
 import re
 
 import numpy as np
@@ -128,16 +129,27 @@ def evaluate_model(model, loader, criterion, device, parent_indices):
     return mean_loss, val_emr, report_str
 
 
-def load_and_transform_dataset(only_complete=True):
-    str_dtypes = {col: str for col in config.BASE_STR_COLS}
-    df = pd.read_csv(config.DATA_PATH, usecols=config.BASE_STR_COLS + ['Haplogroup'], dtype=str_dtypes,
-                     low_memory=False, encoding='utf-8')
-    df = df.dropna(subset=['Haplogroup'])
-    df = df[~df['Haplogroup'].isin(['-'])]
-    df['Haplogroup'] = df['Haplogroup'].astype(str).str.strip()
-    haplogroup_counts = df['Haplogroup'].value_counts()
-    wgs_haplogroups = haplogroup_counts[haplogroup_counts <= 25].index
-    df = df[df['Haplogroup'].isin(wgs_haplogroups)]
+def get_snp_to_tmrca(data):
+    snp_to_tmrca = {}
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if (name := node.get('name')) and (tmrca := node.get('tmrca')):
+            snp_to_tmrca[name] = tmrca.get('mean')
+        if children := node.get('children'):
+            stack.extend(children)
+    return snp_to_tmrca
+
+
+def get_synonym_to_snp(topology):
+    nodes = topology['allNodes']
+    synonym_to_snp = {f"{node['root']}-{synonym['variant']}": node['name']
+                      for node in nodes.values()
+                      for synonym in node['variants']}
+    return synonym_to_snp
+
+
+def transform_multicopies(df):
     transformed = {}
     for col in config.EXTENDED_STR_COLS:
         transformed[col] = np.nan
@@ -150,6 +162,27 @@ def load_and_transform_dataset(only_complete=True):
                 transformed[sub_col] = parsed.apply(lambda x: float(x[i]) if x is not None and len(x) > i else np.nan)
         else:
             transformed[base_col] = parsed.apply(lambda x: float(x[-1]) if x is not None and len(x) > 0 else np.nan)
+    return transformed
+
+
+def load_and_transform_dataset(only_complete=True):
+    str_dtypes = {col: str for col in config.BASE_STR_COLS}
+    df = pd.read_csv(config.DATA_PATH, usecols=config.BASE_STR_COLS + ['Haplogroup'], dtype=str_dtypes,
+                     low_memory=False, encoding='utf-8')
+    df = df.dropna(subset=['Haplogroup'])
+    df = df[~df['Haplogroup'].isin(['-'])]
+    with open('dates_tree.json', 'r', encoding='utf-8') as f:
+        dates = json.load(f)
+    snp_to_tmrca = get_snp_to_tmrca(dates.get('node', {}))
+    with open(config.TOPOLOGY_FILE, 'r', encoding='utf-8') as f:
+        topology = json.load(f)
+    synonym_to_snp = get_synonym_to_snp(topology)
+    df['Canonical_Haplogroup'] = df['Haplogroup'].astype(str).str.strip().map(synonym_to_snp) \
+        .fillna(df['Haplogroup'].astype(str).str.strip())
+    allowed_snps = {snp for snp, age in snp_to_tmrca.items() if age is not None and age >= -3000}
+    df = df[df['Canonical_Haplogroup'].isin(allowed_snps)]
+    df['Haplogroup'] = df['Canonical_Haplogroup']
+    transformed = transform_multicopies(df)
     df_clean = pd.DataFrame(transformed, index=df.index)
     df_clean = df_clean[config.EXTENDED_STR_COLS]
     df_clean['Haplogroup'] = df['Haplogroup']
