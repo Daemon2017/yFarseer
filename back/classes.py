@@ -264,7 +264,7 @@ class MaskedBCELoss(nn.Module):
 
     def forward(self, preds, targets, masks):
         loss = self.bce(preds, targets)
-        depth_multipliers = 1.0 + (self.max_level - self.level_tensor.float()) * 0.5
+        depth_multipliers = 1.0 + self.level_tensor.float() * 0.5
         weighted_loss = loss * depth_multipliers.unsqueeze(0)
         masked_loss = weighted_loss * masks
         base_loss = masked_loss.sum() / (masks.sum() + 1e-8)
