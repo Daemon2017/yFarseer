@@ -43,17 +43,42 @@ def build_matrices(df):
     return features.astype(np.float32), masks
 
 
-def evaluate_model(model, loader, criterion, device, parent_indices):
+def accumulate_metrics_from_batch(inputs, outputs, targets, masks, stats, lengths_standards, force_length=None):
+    num_features = inputs.size(1) // 2
+    preds = (torch.sigmoid(outputs) > 0.5).float()
+    active_preds = preds * masks
+    active_targets = targets * masks
+    fps = ((active_preds == 1.0) & (active_targets == 0.0)).sum(dim=1)
+    fns = ((active_preds == 0.0) & (active_targets == 1.0)).sum(dim=1)
+    if force_length is not None:
+        assigned_standards = torch.full((inputs.size(0),), force_length, dtype=torch.long, device=inputs.device)
+    else:
+        mask_vals = inputs[:, num_features:]
+        sample_lengths = mask_vals.sum(dim=1).long()
+        assigned_standards = torch.zeros_like(sample_lengths)
+        assigned_standards = torch.where(sample_lengths <= 12, 12, assigned_standards)
+        assigned_standards = torch.where((sample_lengths > 12) & (sample_lengths <= 25), 25, assigned_standards)
+        assigned_standards = torch.where((sample_lengths > 25) & (sample_lengths <= 37), 37, assigned_standards)
+        assigned_standards = torch.where((sample_lengths > 37) & (sample_lengths <= 67), 67, assigned_standards)
+        assigned_standards = torch.where(sample_lengths > 67, 111, assigned_standards)
+    for length in lengths_standards:
+        length_mask = (assigned_standards == length)
+        if not length_mask.any():
+            continue
+        sub_fps = fps[length_mask]
+        sub_fns = fns[length_mask]
+        stats[length]["exact"] += ((sub_fps == 0) & (sub_fns == 0)).sum().item()
+        stats[length]["under"] += ((sub_fps == 0) & (sub_fns > 0)).sum().item()
+        stats[length]["over"] += ((sub_fps > 0) & (sub_fns == 0)).sum().item()
+        stats[length]["false_branch"] += ((sub_fps > 0) & (sub_fns > 0)).sum().item()
+        stats[length]["count"] += length_mask.sum().item()
+
+
+def evaluate_model(model, loader, criterion, device, lengths_standards):
     model.eval()
     total_loss = 0.0
     total_samples = 0
-    lengths_standards = [12, 25, 37, 67, 111]
     stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
-    num_snps = len(parent_indices)
-    children_map = {i: [] for i in range(-1, num_snps)}
-    for child_idx, p_idx in enumerate(parent_indices):
-        children_map[p_idx].append(child_idx)
-    roots = children_map[-1]
     with torch.no_grad():
         for inputs, labels, masks in loader:
             inputs, labels, masks = inputs.to(device), labels.to(device), masks.to(device)
@@ -65,8 +90,6 @@ def evaluate_model(model, loader, criterion, device, parent_indices):
             num_features = inputs.size(1) // 2
             base_feat = inputs[:, :num_features]
             base_mask = inputs[:, num_features:]
-            np_labels = labels.cpu().numpy()
-            np_masks = masks.cpu().numpy()
             for length in lengths_standards:
                 feat_sub = base_feat.clone()
                 mask_sub = base_mask.clone()
@@ -75,46 +98,8 @@ def evaluate_model(model, loader, criterion, device, parent_indices):
                     mask_sub[:, length:] = 0.0
                 inputs_sub = torch.hstack([feat_sub, mask_sub])
                 outputs_sub = model(inputs_sub)
-                probs_sub = torch.sigmoid(outputs_sub).cpu().numpy()
-                phylo_preds = np.zeros((batch_size, num_snps), dtype=np.float32)
-                for b in range(batch_size):
-                    sample_probs = probs_sub[b]
-                    active_nodes = []
-                    current_nodes = list(roots)
-                    while current_nodes:
-                        if len(current_nodes) == 1:
-                            node = current_nodes[0]
-                            if sample_probs[node] > 0.5:
-                                active_nodes.append(node)
-                                current_nodes = children_map[node]
-                            else:
-                                break
-                        else:
-                            node_probs = [sample_probs[n] for n in current_nodes]
-                            max_idx = np.argmax(node_probs)
-                            leader_node = current_nodes[max_idx]
-                            leader_prob = node_probs[max_idx]
-                            if leader_prob > 0.5:
-                                sorted_probs = sorted(node_probs, reverse=True)
-                                margin = sorted_probs[0] - sorted_probs[1]
-                                if margin >= 0.15:
-                                    active_nodes.append(leader_node)
-                                    current_nodes = children_map[leader_node]
-                                else:
-                                    break
-                            else:
-                                break
-                    if active_nodes:
-                        phylo_preds[b, active_nodes] = 1.0
-                active_preds = phylo_preds * np_masks
-                active_labels = np_labels * np_masks
-                fps = ((active_preds == 1.0) & (active_labels == 0.0)).sum(axis=1)
-                fns = ((active_preds == 0.0) & (active_labels == 1.0)).sum(axis=1)
-                stats[length]["exact"] += ((fps == 0) & (fns == 0)).sum()
-                stats[length]["under"] += ((fps == 0) & (fns > 0)).sum()
-                stats[length]["over"] += ((fps > 0) & (fns == 0)).sum()
-                stats[length]["false_branch"] += ((fps > 0) & (fns > 0)).sum()
-                stats[length]["count"] += batch_size
+                accumulate_metrics_from_batch(inputs=inputs_sub, outputs=outputs_sub, targets=labels, masks=masks,
+                                              stats=stats, lengths_standards=lengths_standards, force_length=length)
     mean_loss = total_loss / (total_samples + 1e-8)
     val_emr = stats[111]["exact"] / (stats[111]["count"] + 1e-8)
     report_str = ""

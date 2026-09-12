@@ -89,31 +89,8 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            num_features = inputs.size(1) // 2
-            preds = (torch.sigmoid(outputs) > 0.5).float()
-            active_preds = preds * masks
-            active_targets = targets * masks
-            fps = ((active_preds == 1.0) & (active_targets == 0.0)).sum(dim=1)
-            fns = ((active_preds == 0.0) & (active_targets == 1.0)).sum(dim=1)
-            mask_vals = inputs[:, num_features:]
-            sample_lengths = mask_vals.sum(dim=1).long()
-            assigned_standards = torch.zeros_like(sample_lengths)
-            assigned_standards = torch.where(sample_lengths <= 12, 12, assigned_standards)
-            assigned_standards = torch.where((sample_lengths > 12) & (sample_lengths <= 25), 25, assigned_standards)
-            assigned_standards = torch.where((sample_lengths > 25) & (sample_lengths <= 37), 37, assigned_standards)
-            assigned_standards = torch.where((sample_lengths > 37) & (sample_lengths <= 67), 67, assigned_standards)
-            assigned_standards = torch.where(sample_lengths > 67, 111, assigned_standards)
-            for length in lengths_standards:
-                length_mask = (assigned_standards == length)
-                if not length_mask.any():
-                    continue
-                sub_fps = fps[length_mask]
-                sub_fns = fns[length_mask]
-                train_stats[length]["exact"] += ((sub_fps == 0) & (sub_fns == 0)).sum().item()
-                train_stats[length]["under"] += ((sub_fps == 0) & (sub_fns > 0)).sum().item()
-                train_stats[length]["over"] += ((sub_fps > 0) & (sub_fns == 0)).sum().item()
-                train_stats[length]["false_branch"] += ((sub_fps > 0) & (sub_fns > 0)).sum().item()
-                train_stats[length]["count"] += length_mask.sum().item()
+            utils.accumulate_metrics_from_batch(inputs=inputs, outputs=outputs, targets=targets, masks=masks,
+                                                stats=train_stats, lengths_standards=lengths_standards)
         train_loss /= total_train_samples
         train_report = ""
         for length in lengths_standards:
@@ -126,8 +103,8 @@ if __name__ == '__main__':
         train_b_loss = criterion.latest_base_loss
         train_h_loss = criterion.latest_hierarchy_loss
         train_s_loss = criterion.latest_sibling_loss
-        val_loss, val_emr, val_report = utils.evaluate_model(model, val_loader, criterion, config.DEVICE,
-                                                             topo_manager.parent_indices)
+        val_loss, val_emr, val_report = utils.evaluate_model(model=model, loader=val_loader, criterion=criterion,
+                                                             device=config.DEVICE, lengths_standards=lengths_standards)
         val_b_loss = criterion.latest_base_loss
         val_h_loss = criterion.latest_hierarchy_loss
         val_s_loss = criterion.latest_sibling_loss
