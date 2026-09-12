@@ -1,9 +1,10 @@
+import json
 import os
 import time
 
 import numpy as np
+import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
@@ -12,13 +13,29 @@ import config
 import utils
 
 if __name__ == '__main__':
-    print("Loading dataset...")
-    df = utils.load_and_transform_dataset(only_complete=True)
-    df_train, df_val = train_test_split(df, test_size=0.2, random_state=42)
+    print("Loading datasets...")
+    str_dtypes = {col: str for col in config.BASE_STR_COLS}
+    with open(config.DATES_FILE, 'r', encoding='utf-8') as f:
+        dates = json.load(f)
+    with open(config.TOPOLOGY_FILE, 'r', encoding='utf-8') as f:
+        topology = json.load(f)
+    df = pd.read_csv(config.HAPLOTYPES_FILE, usecols=config.BASE_STR_COLS + ['Haplogroup'], dtype=str_dtypes,
+                     low_memory=False, encoding='utf-8')
+    df = utils.transform_dataset(df, True, 0, dates, topology)
+    counts = df['Haplogroup'].value_counts()
+    df_singles = df[df['Haplogroup'].isin(counts[counts == 1].index)]
+    df_multiples = df[df['Haplogroup'].isin(counts[counts > 1].index)]
+    df_val = df_multiples.groupby('Haplogroup', group_keys=False).apply(lambda x: x.sample(1, random_state=42))
+    df_train_multi = df_multiples[~df_multiples.index.isin(df_val.index)]
+    df_train = pd.concat([df_train_multi, df_singles]).sample(frac=1, random_state=42).reset_index(drop=True)
+    df_val = df_val.sample(frac=1, random_state=42).reset_index(drop=True)
+    print(f"Total rows: {len(df)}")
+    print(f"Train: {len(df_train)} rows")
+    print(f"Validation: {len(df_val)} rows")
     print("Loading topology based on train set...")
     unique_train_haplogroups = df_train['Haplogroup'].unique().tolist()
     topo_manager = classes.HierarchyTopologyManager()
-    topo_manager.load_topology(unique_train_haplogroups)
+    topo_manager.prepare_topology(unique_train_haplogroups, topology)
     train_feat, train_mask = utils.build_matrices(df_train)
     val_feat, val_mask = utils.build_matrices(df_val)
     train_haplogroups = df_train['Haplogroup'].tolist()
@@ -47,11 +64,9 @@ if __name__ == '__main__':
     model = classes.GeneticEmbeddingMLP(num_str_markers=num_str_markers, max_allele_val=config.MAX_ALLELE,
                                         embedding_dim=config.EMBEDDING_DIM, output_dim=output_dim,
                                         parent_indices=topo_manager.parent_indices,
-                                        sibling_matrix=topo_manager.sibling_matrix) \
-        .to(config.DEVICE)
+                                        sibling_matrix=topo_manager.sibling_matrix).to(config.DEVICE)
     criterion = classes.MaskedBCELoss(topo_manager.parent_indices, pos_weight_tensor, topo_manager.sibling_matrix,
-                                      level_tensor=model.level_tensor, max_level=model.max_level) \
-        .to(config.DEVICE)
+                                      level_tensor=model.level_tensor, max_level=model.max_level).to(config.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)
     best_val_emr = 0.0
@@ -99,7 +114,6 @@ if __name__ == '__main__':
                 train_stats[length]["over"] += ((sub_fps > 0) & (sub_fns == 0)).sum().item()
                 train_stats[length]["false_branch"] += ((sub_fps > 0) & (sub_fns > 0)).sum().item()
                 train_stats[length]["count"] += length_mask.sum().item()
-        epoch_time = time.time() - start_time
         train_loss /= total_train_samples
         train_report = ""
         for length in lengths_standards:
@@ -119,6 +133,7 @@ if __name__ == '__main__':
         val_s_loss = criterion.latest_sibling_loss
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
+        epoch_time = time.time() - start_time
         print(f"Epoch {epoch + 1:02d} | LR: {current_lr:.6f} | Time: {epoch_time:.2f}s | "
               f"Train Loss: {train_loss:.4f} (B: {train_b_loss:.4f}, H: {train_h_loss:.4f}, S: {train_s_loss:.4f}) | "
               f"Valid Loss: {val_loss:.4f} (B: {val_b_loss:.4f}, H: {val_h_loss:.4f}, S: {val_s_loss:.4f})\n"

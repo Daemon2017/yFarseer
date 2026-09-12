@@ -1,16 +1,17 @@
 import torch
 
-DATA_PATH = 'combined_str.csv'
+HAPLOTYPES_FILE = 'real_haplotypes.csv'
+DATES_FILE = 'dates_tree.json'
 TOPOLOGY_FILE = 'topology_tree.json'
 MODEL_DIR = 'models'
 
 LEARNING_RATE = 0.001
-EPOCHS = 400
+EPOCHS = 100
 BATCH_SIZE = 500
 LAYER_DIM = 256
 EMBEDDING_DIM = 16
 MAX_ALLELE = 50
-MAX_POS_WEIGHT = 100.0
+MAX_POS_WEIGHT = 10.0
 SIBLING_PENALTY_WEIGHT = 2.0
 HIERARCHY_PENALTY_WEIGHT = 1.0
 

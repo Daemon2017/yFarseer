@@ -17,9 +17,7 @@ class HierarchyTopologyManager:
         self.parent_indices = []
         self.sibling_matrix = []
 
-    def load_topology(self, active_haplogroups):
-        with open(config.TOPOLOGY_FILE, 'r', encoding='utf-8') as f:
-            topology_data = json.load(f)
+    def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
         self.synonym_to_snp = {
             f"{node['root']}-{synonym['variant']}": node['name']

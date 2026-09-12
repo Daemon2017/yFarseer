@@ -61,22 +61,16 @@ def hierarchical_predict(model, x, parent_indices, level_tensor, max_level):
                         parents_groups[p_idx] = []
                     parents_groups[p_idx].append(idx)
                 for p_idx, siblings in parents_groups.items():
-                    parent_prob = probs[b, p_idx].item()
                     if len(siblings) == 1:
                         sib_idx = siblings[0]
-                        max_val = probs[b, sib_idx]
-                        adjusted_prob = min(max_val.item(), parent_prob)
-                        probs[b, sib_idx] = adjusted_prob
-                        if adjusted_prob >= 0.5:
+                        if probs[b, sib_idx] >= 0.5:
                             final_active_mask[b, sib_idx] = True
                     else:
                         sib_probs = [probs[b, s_idx].item() for s_idx in siblings]
                         max_idx = np.argmax(sib_probs)
                         best_sib_idx = siblings[max_idx]
                         leader_prob = sib_probs[max_idx]
-                        adjusted_prob = min(leader_prob, parent_prob)
-                        probs[b, best_sib_idx] = adjusted_prob
-                        if adjusted_prob >= 0.5:
+                        if leader_prob >= 0.5:
                             sorted_probs = sorted(sib_probs, reverse=True)
                             margin = sorted_probs[0] - sorted_probs[1]
                             if margin >= 0.15:
