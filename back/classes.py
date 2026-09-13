@@ -134,8 +134,8 @@ class GeneticDataset(Dataset):
                 mask[chosen_length:] = 0.0
             valid_indices = np.where((mask == 1.0) & (feat != 0.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
-                mutation_mapping = {12: 1, 25: 1, 37: 1, 67: 2, 111: 3}
-                num_mutations = mutation_mapping.get(chosen_length, 1)
+                vals, probs = config.MUTATION_DISTRIBUTIONS[chosen_length]
+                num_mutations = int(np.random.choice(vals, p=probs))
                 num_mutations = min(num_mutations, len(valid_indices))
                 lvl_rates = self.mutation_rates_array[valid_indices]
                 rates_sum = np.sum(lvl_rates)

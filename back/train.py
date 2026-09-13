@@ -67,7 +67,7 @@ if __name__ == '__main__':
                                         sibling_matrix=topo_manager.sibling_matrix).to(config.DEVICE)
     criterion = classes.MaskedBCELoss(topo_manager.parent_indices, pos_weight_tensor, topo_manager.sibling_matrix,
                                       level_tensor=model.level_tensor, max_level=model.max_level).to(config.DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)
     best_val_emr = 0.0
     lengths_standards = [12, 25, 37, 67, 111]
