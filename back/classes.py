@@ -193,6 +193,7 @@ class GeneticEmbeddingMLP(nn.Module):
             nn.Dropout(0.3)
         )
         final_mlp_dim = (config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim
+        self.final_dropout = nn.Dropout(0.3)
         self.output_layer = nn.Linear(final_mlp_dim, output_dim)
         self.register_buffer('parent_tensor', torch.tensor(parent_indices, dtype=torch.long), persistent=False)
         if sibling_matrix is not None and len(sibling_matrix) > 0:
@@ -232,6 +233,7 @@ class GeneticEmbeddingMLP(nn.Module):
         feat2_input = torch.cat([feat1, x_emb], dim=1)
         feat2 = self.hidden_layer(feat2_input)
         combined = torch.cat([feat2, feat1, x_emb], dim=1)
+        combined = self.final_dropout(combined)
         return self.output_layer(combined)
 
 
