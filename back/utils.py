@@ -155,10 +155,9 @@ def split_multicopies(df):
     return transformed
 
 
-def transform_dataset(df, only_complete=True, age_threshold=-3000, dates=None, topology=None):
+def transform_dataset(df, only_complete=True, age_threshold=-3000, topology=None, snp_to_tmrca=None):
     df = df.dropna(subset=['Haplogroup'])
     df = df[~df['Haplogroup'].isin(['-'])]
-    snp_to_tmrca = get_snp_to_tmrca(dates.get('node', {}))
     synonym_to_snp = get_synonym_to_snp(topology)
     df['Canonical_Haplogroup'] = df['Haplogroup'].astype(str).str.strip().map(synonym_to_snp) \
         .fillna(df['Haplogroup'].astype(str).str.strip())

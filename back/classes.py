@@ -1,4 +1,5 @@
 import json
+import math
 import os
 
 import numpy as np
@@ -100,13 +101,15 @@ class HierarchyTopologyManager:
 
 
 class GeneticDataset(Dataset):
-    def __init__(self, features, masks, labels, loss_masks, is_training=True):
+    def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None, snp_to_tmrca=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
         self.loss_masks = loss_masks
         self.is_training = is_training
         self.num_features = features.shape[1]
+        self.all_snps = all_snps
+        self.snp_to_tmrca = snp_to_tmrca
         if self.is_training:
             self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
             self.update_epoch_augmentation()
@@ -134,8 +137,34 @@ class GeneticDataset(Dataset):
                 mask[chosen_length:] = 0.0
             valid_indices = np.where((mask == 1.0) & (feat != 0.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
-                vals, probs = config.MUTATION_DISTRIBUTIONS[chosen_length]
-                num_mutations = int(np.random.choice(vals, p=probs))
+                current_labels = self.labels[idx]
+                active_snp_indices = np.where(current_labels == 1.0)[0]
+                tmrca_years = 500.0
+                if len(active_snp_indices) > 0 and self.all_snps:
+                    detected_ages = []
+                    for s_idx in active_snp_indices:
+                        snp_name = self.all_snps[s_idx]
+                        age = self.snp_to_tmrca.get(snp_name)
+                        if age is not None:
+                            years_ago = 1985.0 - float(age)
+                            detected_ages.append(years_ago)
+                    if detected_ages:
+                        tmrca_years = min(detected_ages)
+                tmrca_years = max(100.0, tmrca_years)
+                time_scale = tmrca_years / 500.0
+                vals, base_probs = config.MUTATION_DISTRIBUTIONS[chosen_length]
+                base_expected = np.sum(np.array(vals) * np.array(base_probs))
+                target_expected = base_expected * time_scale
+                adapted_probs = []
+                for v in vals:
+                    p = (target_expected ** v) * math.exp(-target_expected) / math.factorial(v)
+                    adapted_probs.append(p)
+                prob_sum = sum(adapted_probs)
+                if prob_sum > 0:
+                    adapted_probs = [p / prob_sum for p in adapted_probs]
+                else:
+                    adapted_probs = base_probs
+                num_mutations = int(np.random.choice(vals, p=adapted_probs))
                 num_mutations = min(num_mutations, len(valid_indices))
                 lvl_rates = self.mutation_rates_array[valid_indices]
                 rates_sum = np.sum(lvl_rates)

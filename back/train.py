@@ -21,7 +21,8 @@ if __name__ == '__main__':
         topology = json.load(f)
     df = pd.read_csv(config.HAPLOTYPES_FILE, usecols=config.BASE_STR_COLS + ['Haplogroup'], dtype=str_dtypes,
                      low_memory=False, encoding='utf-8')
-    df = utils.transform_dataset(df, True, 0, dates, topology)
+    snp_to_tmrca = utils.get_snp_to_tmrca(dates.get('node', {}))
+    df = utils.transform_dataset(df, True, 0, topology, snp_to_tmrca)
     counts = df['Haplogroup'].value_counts()
     df_singles = df[df['Haplogroup'].isin(counts[counts == 1].index)]
     df_multiples = df[df['Haplogroup'].isin(counts[counts > 1].index)]
@@ -53,8 +54,10 @@ if __name__ == '__main__':
     calculated_weights = np.clip(calculated_weights, 1.0, config.MAX_POS_WEIGHT)
     pos_weight_tensor = torch.tensor(calculated_weights, dtype=torch.float32).to(config.DEVICE)
     print("Preparing datasets...")
-    train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True)
-    val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False)
+    train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True,
+                                           all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
+    val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
+                                         all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
     input_dim = train_feat.shape[1] * 2
