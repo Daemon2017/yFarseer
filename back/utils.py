@@ -78,6 +78,9 @@ def evaluate_model(model, loader, criterion, device, lengths_standards):
     model.eval()
     total_loss = 0.0
     total_samples = 0
+    total_b = 0.0
+    total_h = 0.0
+    total_s = 0.0
     stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
     with torch.no_grad():
         for inputs, labels, masks in loader:
@@ -87,6 +90,9 @@ def evaluate_model(model, loader, criterion, device, lengths_standards):
             outputs = model(inputs)
             loss = criterion(outputs, labels, masks)
             total_loss += loss.item() * batch_size
+            total_b += criterion.latest_base_loss * batch_size
+            total_h += criterion.latest_hierarchy_loss * batch_size
+            total_s += criterion.latest_sibling_loss * batch_size
             num_features = inputs.size(1) // 2
             base_feat = inputs[:, :num_features]
             base_mask = inputs[:, num_features:]
@@ -101,6 +107,9 @@ def evaluate_model(model, loader, criterion, device, lengths_standards):
                 accumulate_metrics_from_batch(inputs=inputs_sub, outputs=outputs_sub, targets=labels, masks=masks,
                                               stats=stats, lengths_standards=lengths_standards, force_length=length)
     mean_loss = total_loss / (total_samples + 1e-8)
+    mean_b = total_b / (total_samples + 1e-8)
+    mean_h = total_h / (total_samples + 1e-8)
+    mean_s = total_s / (total_samples + 1e-8)
     val_emr = stats[111]["exact"] / (stats[111]["count"] + 1e-8)
     report_str = ""
     for length in lengths_standards:
@@ -110,7 +119,7 @@ def evaluate_model(model, loader, criterion, device, lengths_standards):
         over = stats[length]["over"] / c
         fb = stats[length]["false_branch"] / c
         report_str += f" [{length} STR -> EMR: {emr:.3f}, Und: {under:.3f}, Ovr: {over:.3f}, Fls: {fb:.3f}]"
-    return mean_loss, val_emr, report_str
+    return mean_loss, mean_b, mean_h, mean_s, val_emr, report_str
 
 
 def get_snp_to_tmrca(data):
