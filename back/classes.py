@@ -174,7 +174,18 @@ class GeneticDataset(Dataset):
                     p_normalized = None
                 chosen_cols = np.random.choice(valid_indices, size=num_mutations, replace=False, p=p_normalized)
                 for col in chosen_cols:
-                    step = np.random.choice([1.0, 2.0, 3.0], p=[0.88, 0.10, 0.02])
+                    marker_rate = self.mutation_rates_array[col]
+                    rate_factor = marker_rate / 0.002
+                    diffusion_factor = math.sqrt(time_scale * rate_factor)
+                    diffusion_factor = max(0.5, diffusion_factor)
+                    base_p_continue = 0.12
+                    p_continue = base_p_continue * (1.0 - math.exp(-0.5 * diffusion_factor)) / (1.0 - math.exp(-0.5))
+                    p_continue = max(0.05, min(0.45, p_continue))
+                    step = 1.0
+                    while np.random.rand() < p_continue:
+                        step += 1.0
+                        if step >= 10.0:
+                            break
                     direction = np.random.choice([1.0, -1.0])
                     feat[col] += (step * direction)
                 cols = config.EXTENDED_STR_COLS
@@ -211,13 +222,13 @@ class GeneticEmbeddingMLP(nn.Module):
         total_input_dim = num_str_markers * (embedding_dim + 4)
         self.input_layer = nn.Sequential(
             nn.Linear(total_input_dim, config.LAYER_DIM),
-            nn.BatchNorm1d(config.LAYER_DIM),
+            nn.LayerNorm(config.LAYER_DIM),
             nn.ReLU(),
             nn.Dropout(0.3)
         )
         self.hidden_layer = nn.Sequential(
             nn.Linear(config.LAYER_DIM + total_input_dim, config.LAYER_DIM * 2),
-            nn.BatchNorm1d(config.LAYER_DIM * 2),
+            nn.LayerNorm(config.LAYER_DIM * 2),
             nn.ReLU(),
             nn.Dropout(0.3)
         )
