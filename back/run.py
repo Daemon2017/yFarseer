@@ -30,18 +30,15 @@ def hierarchical_predict(model, x, parent_indices, level_tensor, max_level):
             for b in range(batch_size):
                 if len(root_indices) == 1:
                     best_root_idx = root_indices[0]
-                    if probs[b, best_root_idx] >= 0.5:
+                    if probs[b, best_root_idx] >= config.THRESHOLD:
                         final_active_mask[b, best_root_idx] = True
                 else:
                     root_probs = [probs[b, r_idx].item() for r_idx in root_indices]
                     max_idx = np.argmax(root_probs)
                     best_root_idx = root_indices[max_idx]
                     leader_prob = root_probs[max_idx]
-                    if leader_prob >= 0.5:
-                        sorted_probs = sorted(root_probs, reverse=True)
-                        margin = sorted_probs[0] - sorted_probs[1]
-                        if margin >= 0.15:
-                            final_active_mask[b, best_root_idx] = True
+                    if leader_prob >= config.THRESHOLD:
+                        final_active_mask[b, best_root_idx] = True
         for lvl in range(1, max_level + 1):
             lvl_indices = [idx for idx, l in enumerate(levels_list) if l == lvl]
             if not lvl_indices:
@@ -63,18 +60,15 @@ def hierarchical_predict(model, x, parent_indices, level_tensor, max_level):
                 for p_idx, siblings in parents_groups.items():
                     if len(siblings) == 1:
                         sib_idx = siblings[0]
-                        if probs[b, sib_idx] >= 0.5:
+                        if probs[b, sib_idx] >= config.THRESHOLD:
                             final_active_mask[b, sib_idx] = True
                     else:
                         sib_probs = [probs[b, s_idx].item() for s_idx in siblings]
                         max_idx = np.argmax(sib_probs)
                         best_sib_idx = siblings[max_idx]
                         leader_prob = sib_probs[max_idx]
-                        if leader_prob >= 0.5:
-                            sorted_probs = sorted(sib_probs, reverse=True)
-                            margin = sorted_probs[0] - sorted_probs[1]
-                            if margin >= 0.15:
-                                final_active_mask[b, best_sib_idx] = True
+                        if leader_prob >= config.THRESHOLD:
+                            final_active_mask[b, best_sib_idx] = True
         probs = torch.where(final_active_mask, probs, torch.tensor(0.0, device=probs.device))
     return probs
 
@@ -140,7 +134,7 @@ class GeneticSingleModel:
         for i in range(num_samples):
             sample_chain = []
             for idx, snp_name in enumerate(self.sorted_snps):
-                if probs[i, idx] >= 0.5:
+                if probs[i, idx] >= config.THRESHOLD:
                     sample_chain.append((snp_name, float(probs[i, idx])))
             results.append(sample_chain)
         return results
@@ -221,7 +215,7 @@ def predict_snp():
     if not req_json or 'haplotype' not in req_json:
         return jsonify({'status': 'error', 'message': 'Некорректный или пустой JSON запрос'}), 400
     try:
-        threshold_param = req_json.get('confidence', 0.5)
+        threshold_param = req_json.get('confidence', config.THRESHOLD)
         haplotype_input = req_json['haplotype']
         if isinstance(haplotype_input, str):
             vals = [v.strip() for v in re.split(r'[\s,;\t]+', haplotype_input.strip()) if v.strip()]
