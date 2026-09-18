@@ -45,7 +45,7 @@ def build_matrices(df):
 
 def accumulate_metrics_from_batch(inputs, outputs, targets, masks, stats, lengths_standards, force_length=None):
     num_features = inputs.size(1) // 2
-    preds = (torch.sigmoid(outputs) > config.THRESHOLD).float()
+    preds = (torch.sigmoid(outputs) > config.TRAIN_THRESHOLD).float()
     active_preds = preds * masks
     active_targets = targets * masks
     fps = ((active_preds == 1.0) & (active_targets == 0.0)).sum(dim=1)
