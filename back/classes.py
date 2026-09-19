@@ -130,8 +130,9 @@ class GeneticDataset(Dataset):
     def __getitem__(self, idx):
         feat = self.base_features[idx].copy()
         mask = self.masks[idx].copy()
+        cols = config.EXTENDED_STR_COLS
+        chosen_length = self.assigned_lengths[idx] if self.is_training else self.num_features
         if self.is_training:
-            chosen_length = self.assigned_lengths[idx]
             if chosen_length < self.num_features:
                 feat[chosen_length:] = 0.0
                 mask[chosen_length:] = 0.0
@@ -187,19 +188,26 @@ class GeneticDataset(Dataset):
                         if step >= 10.0:
                             break
                     direction = np.random.choice([1.0, -1.0])
-                    feat[col] += (step * direction)
-                cols = config.EXTENDED_STR_COLS
-                for base_col, expected_len in config.MULTICOPIES.items():
-                    suffixes = ['a', 'b', 'c', 'd'][:expected_len]
-                    sub_cols = [f"{base_col}{suf}" for suf in suffixes]
-                    try:
-                        start_idx = cols.index(sub_cols[0])
-                        end_idx = start_idx + expected_len
-                        if start_idx < chosen_length:
-                            actual_end = min(end_idx, chosen_length)
-                            feat[start_idx:actual_end] = np.sort(feat[start_idx:actual_end])
-                    except ValueError:
-                        continue
+                    mutation_value = step * direction
+                    feat[col] += mutation_value
+                    if cols[col] == 'DYS389i':
+                        try:
+                            ii_idx = cols.index('DYS389ii')
+                            if ii_idx < chosen_length and mask[ii_idx] == 1.0:
+                                feat[ii_idx] += mutation_value
+                        except ValueError:
+                            pass
+        for base_col, expected_len in config.MULTICOPIES.items():
+            suffixes = ['a', 'b', 'c', 'd'][:expected_len]
+            sub_cols = [f"{base_col}{suf}" for suf in suffixes]
+            try:
+                start_idx = cols.index(sub_cols[0])
+                end_idx = start_idx + expected_len
+                if start_idx < chosen_length:
+                    actual_end = min(end_idx, chosen_length)
+                    feat[start_idx:actual_end] = np.sort(feat[start_idx:actual_end])
+            except ValueError:
+                continue
         feat = np.clip(feat, a_min=0.0, a_max=float(config.MAX_ALLELE - 1))
         inputs = np.hstack([feat, mask])
         return (torch.tensor(inputs, dtype=torch.float32),
