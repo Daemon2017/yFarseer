@@ -110,8 +110,8 @@ class GeneticDataset(Dataset):
         self.num_features = features.shape[1]
         self.all_snps = all_snps
         self.snp_to_tmrca = snp_to_tmrca
+        self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
         if self.is_training:
-            self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
             self.update_epoch_augmentation()
         self.mutation_rates_array = np.array(
             [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS], dtype=np.float32)
