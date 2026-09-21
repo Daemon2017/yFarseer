@@ -101,7 +101,7 @@ class HierarchyTopologyManager:
 
 
 class GeneticDataset(Dataset):
-    def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None, snp_to_tmrca=None):
+    def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
@@ -109,7 +109,6 @@ class GeneticDataset(Dataset):
         self.is_training = is_training
         self.num_features = features.shape[1]
         self.all_snps = all_snps
-        self.snp_to_tmrca = snp_to_tmrca
         self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
         if self.is_training:
             self.update_epoch_augmentation()
@@ -138,21 +137,7 @@ class GeneticDataset(Dataset):
                 mask[chosen_length:] = 0.0
             valid_indices = np.where((mask == 1.0) & (feat != 0.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
-                current_labels = self.labels[idx]
-                active_snp_indices = np.where(current_labels == 1.0)[0]
-                tmrca_years = 500.0
-                if len(active_snp_indices) > 0 and self.all_snps:
-                    detected_ages = []
-                    for s_idx in active_snp_indices:
-                        snp_name = self.all_snps[s_idx]
-                        age = self.snp_to_tmrca.get(snp_name)
-                        if age is not None:
-                            years_ago = 1985.0 - float(age)
-                            detected_ages.append(years_ago)
-                    if detected_ages:
-                        tmrca_years = min(detected_ages)
-                tmrca_years = max(100.0, tmrca_years)
-                time_scale = tmrca_years / 500.0
+                time_scale = np.random.uniform(0.25, 2.0)
                 vals, base_probs = config.MUTATION_DISTRIBUTIONS[chosen_length]
                 base_expected = np.sum(np.array(vals) * np.array(base_probs))
                 target_expected = base_expected * time_scale
@@ -169,10 +154,7 @@ class GeneticDataset(Dataset):
                 num_mutations = min(num_mutations, len(valid_indices))
                 lvl_rates = self.mutation_rates_array[valid_indices]
                 rates_sum = np.sum(lvl_rates)
-                if rates_sum > 0:
-                    p_normalized = lvl_rates / rates_sum
-                else:
-                    p_normalized = None
+                p_normalized = lvl_rates / rates_sum if rates_sum > 0 else None
                 chosen_cols = np.random.choice(valid_indices, size=num_mutations, replace=False, p=p_normalized)
                 for col in chosen_cols:
                     marker_rate = self.mutation_rates_array[col]
