@@ -136,7 +136,7 @@ class GeneticDataset(Dataset):
             if chosen_length < self.num_features:
                 feat[chosen_length:] = 0.0
                 mask[chosen_length:] = 0.0
-            valid_indices = np.where((mask == 1.0) & (feat != 0.0) & (~np.isnan(feat)))[0]
+            valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
                 current_labels = self.labels[idx]
                 active_snp_indices = np.where(current_labels == 1.0)[0]
@@ -161,18 +161,12 @@ class GeneticDataset(Dataset):
                     p = (target_expected ** v) * math.exp(-target_expected) / math.factorial(v)
                     adapted_probs.append(p)
                 prob_sum = sum(adapted_probs)
-                if prob_sum > 0:
-                    adapted_probs = [p / prob_sum for p in adapted_probs]
-                else:
-                    adapted_probs = base_probs
+                adapted_probs = [p / prob_sum for p in adapted_probs] if prob_sum > 0 else base_probs
                 num_mutations = int(np.random.choice(vals, p=adapted_probs))
                 num_mutations = min(num_mutations, len(valid_indices))
                 lvl_rates = self.mutation_rates_array[valid_indices]
                 rates_sum = np.sum(lvl_rates)
-                if rates_sum > 0:
-                    p_normalized = lvl_rates / rates_sum
-                else:
-                    p_normalized = None
+                p_normalized = lvl_rates / rates_sum if rates_sum > 0 else None
                 chosen_cols = np.random.choice(valid_indices, size=num_mutations, replace=False, p=p_normalized)
                 for col in chosen_cols:
                     marker_rate = self.mutation_rates_array[col]
