@@ -101,7 +101,8 @@ class HierarchyTopologyManager:
 
 
 class GeneticDataset(Dataset):
-    def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None, snp_to_tmrca=None):
+    def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None, snp_to_tmrca=None,
+                 parent_indices=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
@@ -110,11 +111,47 @@ class GeneticDataset(Dataset):
         self.num_features = features.shape[1]
         self.all_snps = all_snps
         self.snp_to_tmrca = snp_to_tmrca
+        self.parent_indices = parent_indices
         self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
         if self.is_training:
             self.update_epoch_augmentation()
         self.mutation_rates_array = np.array(
             [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS], dtype=np.float32)
+        self.snp_levels = np.zeros(len(self.all_snps or []), dtype=np.int32)
+        if self.parent_indices:
+            for i in range(len(self.parent_indices)):
+                path_len = 0
+                curr = self.parent_indices[i]
+                while curr != -1:
+                    path_len += 1
+                    curr = self.parent_indices[curr]
+                self.snp_levels[i] = path_len
+        self.snp_evolution_intervals = {}
+        if self.all_snps and self.snp_to_tmrca and self.parent_indices:
+            num_snps = len(self.all_snps)
+            parent_to_children = {i: [] for i in range(num_snps)}
+            for child_idx, parent_idx in enumerate(self.parent_indices):
+                if parent_idx != -1 and parent_idx < num_snps:
+                    parent_to_children[parent_idx].append(child_idx)
+            for idx, snp_name in enumerate(self.all_snps):
+                age = self.snp_to_tmrca.get(snp_name)
+                if age is None:
+                    self.snp_evolution_intervals[snp_name] = 500.0
+                    continue
+                age = float(age)
+                children_indices = parent_to_children.get(idx, [])
+                children_ages = []
+                for c_idx in children_indices:
+                    c_name = self.all_snps[c_idx]
+                    c_age = self.snp_to_tmrca.get(c_name)
+                    if c_age is not None:
+                        children_ages.append(float(c_age))
+                if children_ages:
+                    mean_children_age = sum(children_ages) / len(children_ages)
+                    interval = mean_children_age - age
+                else:
+                    interval = 1985.0 - age
+                self.snp_evolution_intervals[snp_name] = max(0.0, interval)
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
@@ -142,15 +179,12 @@ class GeneticDataset(Dataset):
                 active_snp_indices = np.where(current_labels == 1.0)[0]
                 tmrca_years = 500.0
                 if len(active_snp_indices) > 0 and self.all_snps:
-                    detected_ages = []
-                    for s_idx in active_snp_indices:
-                        snp_name = self.all_snps[s_idx]
-                        age = self.snp_to_tmrca.get(snp_name)
-                        if age is not None:
-                            years_ago = 1985.0 - float(age)
-                            detected_ages.append(years_ago)
-                    if detected_ages:
-                        tmrca_years = min(detected_ages)
+                    active_levels = self.snp_levels[active_snp_indices]
+                    deepest_local_idx = active_snp_indices[np.argmax(active_levels)]
+                    last_snp_name = self.all_snps[deepest_local_idx]
+                    interval = self.snp_evolution_intervals.get(last_snp_name)
+                    if interval is not None:
+                        tmrca_years = interval
                 tmrca_years = max(100.0, tmrca_years)
                 time_scale = tmrca_years / 500.0
                 vals, base_probs = config.MUTATION_DISTRIBUTIONS[chosen_length]

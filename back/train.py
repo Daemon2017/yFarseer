@@ -55,7 +55,8 @@ if __name__ == '__main__':
     pos_weight_tensor = torch.tensor(calculated_weights, dtype=torch.float32).to(config.DEVICE)
     print("Preparing datasets...")
     train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True,
-                                           all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
+                                           all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
+                                           parent_indices=topo_manager.parent_indices)
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
                                          all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True)
