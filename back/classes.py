@@ -115,8 +115,14 @@ class GeneticDataset(Dataset):
         self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
         if self.is_training:
             self.update_epoch_augmentation()
-        self.mutation_rates_array = np.array(
-            [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS], dtype=np.float32)
+        self.idx_389i = config.EXTENDED_STR_COLS.index('DYS389i') if 'DYS389i' in config.EXTENDED_STR_COLS else None
+        self.idx_389ii = config.EXTENDED_STR_COLS.index('DYS389ii') if 'DYS389ii' in config.EXTENDED_STR_COLS else None
+        base_rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
+        if self.idx_389i is not None and self.idx_389ii is not None:
+            rate_i = config.STR_MUTATION_RATES.get('DYS389i', 0.00186)
+            rate_ii = config.STR_MUTATION_RATES.get('DYS389ii', 0.00242)
+            base_rates[self.idx_389ii] = max(0.0001, rate_ii - rate_i)
+        self.mutation_rates_array = np.array(base_rates, dtype=np.float32)
         self.snp_levels = np.zeros(len(self.all_snps or []), dtype=np.int32)
         if self.parent_indices:
             for i in range(len(self.parent_indices)):
@@ -169,11 +175,20 @@ class GeneticDataset(Dataset):
         mask = self.masks[idx].copy()
         cols = config.EXTENDED_STR_COLS
         chosen_length = self.assigned_lengths[idx] if self.is_training else self.num_features
+        use_389_sync = (self.idx_389i is not None and self.idx_389ii is not None and
+                        self.idx_389i < chosen_length and self.idx_389ii < chosen_length and
+                        mask[self.idx_389i] == 1.0 and mask[self.idx_389ii] == 1.0)
+        if use_389_sync:
+            feat[self.idx_389ii] = feat[self.idx_389ii] - feat[self.idx_389i]
         if self.is_training:
             if chosen_length < self.num_features:
                 feat[chosen_length:] = 0.0
                 mask[chosen_length:] = 0.0
-            valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
+            if use_389_sync:
+                valid_indices = np.where(
+                    (mask == 1.0) & ((feat > 1.0) | (np.arange(len(feat)) == self.idx_389ii)) & (~np.isnan(feat)))[0]
+            else:
+                valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
                 current_labels = self.labels[idx]
                 active_snp_indices = np.where(current_labels == 1.0)[0]
@@ -218,13 +233,8 @@ class GeneticDataset(Dataset):
                     direction = np.random.choice([1.0, -1.0])
                     mutation_value = step * direction
                     feat[col] += mutation_value
-                    if cols[col] == 'DYS389i':
-                        try:
-                            ii_idx = cols.index('DYS389ii')
-                            if ii_idx < chosen_length and mask[ii_idx] == 1.0:
-                                feat[ii_idx] += mutation_value
-                        except ValueError:
-                            pass
+        if use_389_sync:
+            feat[self.idx_389ii] = feat[self.idx_389i] + feat[self.idx_389ii]
         for base_col, expected_len in config.MULTICOPIES.items():
             suffixes = ['a', 'b', 'c', 'd'][:expected_len]
             sub_cols = [f"{base_col}{suf}" for suf in suffixes]
