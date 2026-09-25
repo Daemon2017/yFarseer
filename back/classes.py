@@ -328,11 +328,9 @@ class MaskedBCELoss(nn.Module):
     def __init__(self, parent_indices, pos_weight, sibling_matrix=None, level_tensor=None, max_level=0):
         super().__init__()
         self.latest_sibling_loss = 0
-        self.latest_hierarchy_loss = 0
         self.latest_base_loss = 0
         self.max_level = max_level
         self.bce = nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
-        self.register_buffer("parent_tensor", torch.tensor(parent_indices, dtype=torch.long))
         if level_tensor is not None:
             self.register_buffer("level_tensor", level_tensor.clone().detach())
         else:
@@ -357,25 +355,11 @@ class MaskedBCELoss(nn.Module):
         weighted_loss = loss * depth_multipliers.unsqueeze(0)
         masked_loss = weighted_loss * masks
         base_loss = masked_loss.sum() / (masks.sum() + 1e-8)
-        probs = torch.sigmoid(preds)
-        mask = self.parent_tensor != -1
-        valid_children = torch.where(mask)[0]
-        valid_parents = self.parent_tensor[valid_children]
-        parent_negative_mask = probs[:, valid_parents] < 0.5
-        descendant_violation = (probs[:, valid_children] * parent_negative_mask.float())
-        child_positive_mask = probs[:, valid_children] >= 0.5
-        ancestor_violation = (torch.clamp(probs[:, valid_children] - probs[:, valid_parents],
-                                          min=0.0) * child_positive_mask.float())
-        total_h_violation = (descendant_violation + ancestor_violation) * masks[:, valid_children]
-        if total_h_violation.any():
-            violation_loss = total_h_violation[total_h_violation > 0].mean()
-        else:
-            violation_loss = torch.tensor(0.0, device=preds.device)
         sibling_loss = torch.tensor(0.0, device=preds.device)
         if self.sibling_matrix.numel() > 0 and self.sibling_matrix.size(0) > 0:
             epsilon = 1e-8
             group_masks = torch.matmul(masks, self.sibling_matrix.t()) > 0
-            group_sums = torch.matmul(probs, self.sibling_matrix.t())
+            group_sums = torch.matmul(torch.sigmoid(preds), self.sibling_matrix.t())
             group_targets = torch.matmul(targets, self.sibling_matrix.t())
             norm_targets = group_targets / (group_targets.sum(dim=1, keepdim=True) + epsilon)
             log_group_sums = torch.log(group_sums + epsilon)
@@ -385,7 +369,5 @@ class MaskedBCELoss(nn.Module):
             if group_masks.any():
                 sibling_loss = masked_sibling.sum() / (group_masks.sum() + epsilon)
         self.latest_base_loss = base_loss.item()
-        self.latest_hierarchy_loss = (config.HIERARCHY_PENALTY_WEIGHT * violation_loss).item()
         self.latest_sibling_loss = (config.SIBLING_PENALTY_WEIGHT * sibling_loss).item()
-        return (base_loss + (config.HIERARCHY_PENALTY_WEIGHT * violation_loss) +
-                (config.SIBLING_PENALTY_WEIGHT * sibling_loss))
+        return base_loss + (config.SIBLING_PENALTY_WEIGHT * sibling_loss)
