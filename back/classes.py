@@ -344,14 +344,14 @@ class MaskedBCELoss(nn.Module):
                 parent_idx = parent_indices[first_child_idx]
                 group_parents.append(parent_idx)
             group_levels = level_tensor[group_parents] if level_tensor is not None else torch.zeros(num_groups)
-            self.register_buffer("group_depth_weights", 1.0 + group_levels.float())
+            self.register_buffer("group_depth_weights", 1.0 + torch.log1p(group_levels.float()))
         else:
             self.register_buffer("sibling_matrix", torch.empty(0))
             self.register_buffer("group_depth_weights", torch.empty(0))
 
     def forward(self, preds, targets, masks):
         loss = self.bce(preds, targets)
-        depth_multipliers = 1.0 + self.level_tensor.float() * 0.5
+        depth_multipliers = 1.0 + torch.log1p(self.level_tensor.float())
         weighted_loss = loss * depth_multipliers.unsqueeze(0)
         masked_loss = weighted_loss * masks
         base_loss = masked_loss.sum() / (masks.sum() + 1e-8)
