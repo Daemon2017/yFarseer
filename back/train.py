@@ -44,15 +44,6 @@ if __name__ == '__main__':
     print("Generating masks and labels...")
     train_labels, train_lmasks = topo_manager.generate_labels_and_masks(train_haplogroups)
     val_labels, val_lmasks = topo_manager.generate_labels_and_masks(val_haplogroups)
-    print("Calculating weights...")
-    pos_counts = np.sum(train_labels * train_lmasks, axis=0)
-    total_active_samples = np.sum(train_lmasks, axis=0)
-    smoothed_pos = pos_counts + 1.0
-    smoothed_total = total_active_samples + 2.0
-    calculated_weights = (smoothed_total - smoothed_pos) / smoothed_pos
-    calculated_weights = np.log1p(calculated_weights) + 1.0
-    calculated_weights = np.clip(calculated_weights, 1.0, config.MAX_POS_WEIGHT)
-    pos_weight_tensor = torch.tensor(calculated_weights, dtype=torch.float32).to(config.DEVICE)
     print("Preparing datasets...")
     train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True,
                                            all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
@@ -64,6 +55,7 @@ if __name__ == '__main__':
     input_dim = train_feat.shape[1] * 2
     output_dim = train_labels.shape[1]
     num_str_markers = train_feat.shape[1]
+    pos_weight_tensor = torch.ones(output_dim, dtype=torch.float32).to(config.DEVICE)
     print("Preparing model...")
     model = classes.GeneticEmbeddingMLP(num_str_markers=num_str_markers, max_allele_val=config.MAX_ALLELE,
                                         embedding_dim=config.EMBEDDING_DIM, output_dim=output_dim,
