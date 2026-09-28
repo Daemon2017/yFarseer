@@ -368,7 +368,9 @@ class MaskedBCELoss(nn.Module):
         depth_multipliers = 1.0 + torch.log1p(self.level_tensor.float())
         weighted_loss = loss * depth_multipliers.unsqueeze(0)
         masked_loss = weighted_loss * masks
-        base_loss = masked_loss.sum() / (masks.sum() + 1e-8)
+        panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
+        weighted_by_panel = masked_loss * panel_completeness
+        base_loss = weighted_by_panel.sum() / (masks.sum() + 1e-8)
         sibling_loss = torch.tensor(0.0, device=preds.device)
         if self.sibling_matrix.numel() > 0 and self.sibling_matrix.size(0) > 0:
             epsilon = 1e-8
