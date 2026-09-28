@@ -321,7 +321,21 @@ class GeneticEmbeddingMLP(nn.Module):
         feat2 = self.hidden_layer(feat2_input)
         combined = torch.cat([feat2, feat1, x_emb], dim=1)
         combined = self.final_dropout(combined)
-        return self.output_layer(combined)
+        logits = self.output_layer(combined)
+        probs = torch.sigmoid(logits)
+        hierarchical_probs = probs.clone()
+        for level in range(1, self.max_level + 1):
+            mask_level = (self.level_tensor == level)
+            if not mask_level.any():
+                continue
+            child_indices = torch.where(mask_level)[0]
+            parent_indices = self.parent_tensor[child_indices]
+            hierarchical_probs[:, child_indices] = hierarchical_probs[:, child_indices] * \
+                                                   hierarchical_probs[:, parent_indices]
+        eps = 1e-7
+        hierarchical_probs = torch.clamp(hierarchical_probs, min=eps, max=1.0 - eps)
+        hierarchical_logits = torch.log(hierarchical_probs / (1.0 - hierarchical_probs))
+        return hierarchical_logits
 
 
 class MaskedBCELoss(nn.Module):
