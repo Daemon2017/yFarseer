@@ -20,49 +20,56 @@ class HierarchyTopologyManager:
 
     def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
+        name_to_node = {node['name']: node for node in nodes.values()}
         self.synonym_to_snp = {
             f"{node['root']}-{synonym['variant']}": node['name']
             for node in nodes.values()
             for synonym in node['variants']
         }
-        for node_id, node in nodes.items():
-            path = []
-            curr = node
-            while curr:
-                path.append(curr['name'])
-                parent_id = curr.get('parentId')
-                curr = nodes.get(str(parent_id)) if parent_id else None
-            path.reverse()
-            self.snp_to_ancestors[node['name']] = path
+        self.snp_to_ancestors = {}
+
+        def get_ancestors(node_name):
+            if node_name in self.snp_to_ancestors:
+                return self.snp_to_ancestors[node_name]
+            node = name_to_node.get(node_name)
+            if not node:
+                return [node_name]
+            p_id = node.get('parentId')
+            p_node = nodes.get(str(p_id)) if p_id else None
+            if p_node:
+                path = get_ancestors(p_node['name']) + [node_name]
+            else:
+                path = [node_name]
+            self.snp_to_ancestors[node_name] = path
+            return path
+
+        for node in nodes.values():
+            get_ancestors(node['name'])
         unique_active_snps = set()
         for h in active_haplogroups:
             canonical = self.synonym_to_snp.get(h, h)
-            ancestors = self.snp_to_ancestors.get(canonical, [canonical])
-            unique_active_snps.update(ancestors)
+            unique_active_snps.update(get_ancestors(canonical))
         self.all_snps = sorted(list(unique_active_snps))
         snp_to_idx = {snp: idx for idx, snp in enumerate(self.all_snps)}
         self.parent_indices = [-1] * len(self.all_snps)
-        for snp in self.all_snps:
-            target_node = next((n for n in nodes.values() if n['name'] == snp), None)
+        for idx, snp in enumerate(self.all_snps):
+            target_node = name_to_node.get(snp)
             if target_node:
                 p_id = target_node.get('parentId')
                 p_node = nodes.get(str(p_id)) if p_id else None
                 if p_node and p_node['name'] in snp_to_idx:
-                    self.parent_indices[snp_to_idx[snp]] = snp_to_idx[p_node['name']]
+                    self.parent_indices[idx] = snp_to_idx[p_node['name']]
         parent_to_children = {}
         for child_idx, parent_idx in enumerate(self.parent_indices):
             if parent_idx != -1:
-                if parent_idx not in parent_to_children:
-                    parent_to_children[parent_idx] = []
-                parent_to_children[parent_idx].append(child_idx)
+                parent_to_children.setdefault(parent_idx, []).append(child_idx)
         sibling_groups = [children for children in parent_to_children.values() if len(children) > 1]
         num_snps = len(self.all_snps)
         num_groups = len(sibling_groups)
         if num_groups > 0:
             sib_matrix = np.zeros((num_groups, num_snps), dtype=np.float32)
             for g_idx, group in enumerate(sibling_groups):
-                for snp_idx in group:
-                    sib_matrix[g_idx, snp_idx] = 1.0
+                sib_matrix[g_idx, group] = 1.0
             self.sibling_matrix = sib_matrix
         else:
             self.sibling_matrix = np.zeros((0, num_snps), dtype=np.float32)

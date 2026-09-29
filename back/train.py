@@ -2,7 +2,6 @@ import json
 import os
 import time
 
-import numpy as np
 import pandas as pd
 import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
