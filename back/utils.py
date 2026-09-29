@@ -35,12 +35,12 @@ def parse_str_value(val, col_base):
 
 def build_matrices(df):
     features = df[config.EXTENDED_STR_COLS].values
-    masks = (~np.isnan(features)).astype(np.float32)
-    features = np.floor(np.nan_to_num(features, nan=-1.0)).astype(np.int64)
+    masks = (~np.isnan(features)).astype(np.uint8)
+    features = np.floor(np.nan_to_num(features, nan=-1.0)).astype(np.int16)
     features = np.where(features >= 0, features + 1, 0)
     max_allowed_idx = config.MAX_ALLELE - 1
     features = np.clip(features, a_min=0, a_max=max_allowed_idx)
-    return features.astype(np.float32), masks
+    return features.astype(np.int64), masks
 
 
 def accumulate_metrics_from_batch(inputs, outputs, targets, masks, stats, lengths_standards, force_length=None):
@@ -132,10 +132,9 @@ def get_snp_to_tmrca(data):
 
 
 def get_synonym_to_snp(topology):
-    synonym_to_snp = {f"{node['root']}-{synonym['variant']}": node['name']
-                      for node in topology.get('allNodes', {}).values()
-                      for synonym in node['variants']}
-    return synonym_to_snp
+    return {f"{node['root']}-{synonym['variant']}": node['name']
+            for node in topology.get('allNodes', {}).values()
+            for synonym in node['variants']}
 
 
 def split_multicopies(df):

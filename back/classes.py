@@ -82,8 +82,8 @@ class HierarchyTopologyManager:
     def generate_labels_and_masks(self, haplogroups):
         num_samples = len(haplogroups)
         num_snps = len(self.all_snps)
-        labels = np.zeros((num_samples, num_snps), dtype=np.float32)
-        loss_masks = np.ones((num_samples, num_snps), dtype=np.float32)
+        labels = np.zeros((num_samples, num_snps), dtype=np.uint8)
+        loss_masks = np.ones((num_samples, num_snps), dtype=np.uint8)
         snp_to_idx = {snp: idx for idx, snp in enumerate(self.all_snps)}
         children_map = {i: [] for i in range(-1, num_snps)}
         for child_idx, parent_idx in enumerate(self.parent_indices):
@@ -95,14 +95,14 @@ class HierarchyTopologyManager:
             for snp in ancestors:
                 if snp in snp_to_idx:
                     idx = snp_to_idx[snp]
-                    labels[i, idx] = 1.0
+                    labels[i, idx] = 1
                     if snp == canonical:
                         terminal_idx = idx
             if terminal_idx != -1:
                 queue = list(children_map[terminal_idx])
                 while queue:
                     curr_idx = queue.pop(0)
-                    loss_masks[i, curr_idx] = 0.0
+                    loss_masks[i, curr_idx] = 0
                     queue.extend(children_map[curr_idx])
         return labels, loss_masks
 
@@ -178,8 +178,12 @@ class GeneticDataset(Dataset):
         return len(self.base_features)
 
     def __getitem__(self, idx):
-        feat = self.base_features[idx].copy()
-        mask = self.masks[idx].copy()
+        if self.is_training:
+            feat = self.base_features[idx].copy().astype(np.float32)
+            mask = self.masks[idx].copy().astype(np.float32)
+        else:
+            feat = self.base_features[idx].astype(np.float32)
+            mask = self.masks[idx].astype(np.float32)
         cols = config.EXTENDED_STR_COLS
         chosen_length = self.assigned_lengths[idx] if self.is_training else self.num_features
         use_389_sync = (self.idx_389i is not None and self.idx_389ii is not None and
