@@ -16,7 +16,6 @@ class HierarchyTopologyManager:
         self.snp_to_ancestors = {}
         self.all_snps = []
         self.parent_indices = []
-        self.sibling_matrix = []
 
     def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
@@ -59,20 +58,6 @@ class HierarchyTopologyManager:
                 p_node = nodes.get(str(p_id)) if p_id else None
                 if p_node and p_node['name'] in snp_to_idx:
                     self.parent_indices[idx] = snp_to_idx[p_node['name']]
-        parent_to_children = {}
-        for child_idx, parent_idx in enumerate(self.parent_indices):
-            if parent_idx != -1:
-                parent_to_children.setdefault(parent_idx, []).append(child_idx)
-        sibling_groups = [children for children in parent_to_children.values() if len(children) > 1]
-        num_snps = len(self.all_snps)
-        num_groups = len(sibling_groups)
-        if num_groups > 0:
-            sib_matrix = np.zeros((num_groups, num_snps), dtype=np.float32)
-            for g_idx, group in enumerate(sibling_groups):
-                sib_matrix[g_idx, group] = 1.0
-            self.sibling_matrix = sib_matrix
-        else:
-            self.sibling_matrix = np.zeros((0, num_snps), dtype=np.float32)
         os.makedirs(config.MODEL_DIR, exist_ok=True)
         with open(os.path.join(config.MODEL_DIR, 'snp_list.json'), 'w', encoding='utf-8') as f:
             json.dump(self.all_snps, f, ensure_ascii=False)
@@ -265,8 +250,7 @@ class GeneticDataset(Dataset):
 
 
 class GeneticEmbeddingMLP(nn.Module):
-    def __init__(self, num_str_markers, max_allele_val, embedding_dim, output_dim, parent_indices=None,
-                 sibling_matrix=None):
+    def __init__(self, num_str_markers, max_allele_val, embedding_dim, output_dim, parent_indices=None):
         super().__init__()
         self.num_str_markers = num_str_markers
         self.embedding_dim = embedding_dim
@@ -294,10 +278,6 @@ class GeneticEmbeddingMLP(nn.Module):
         self.final_dropout = nn.Dropout(0.3)
         self.output_layer = nn.Linear(final_mlp_dim, output_dim)
         self.register_buffer('parent_tensor', torch.tensor(parent_indices, dtype=torch.long), persistent=False)
-        if sibling_matrix is not None and len(sibling_matrix) > 0:
-            self.register_buffer('sibling_tensor', torch.tensor(sibling_matrix, dtype=torch.float32), persistent=False)
-        else:
-            self.register_buffer('sibling_tensor', torch.empty(0), persistent=False)
         levels = [-1] * len(parent_indices)
         for i in range(len(parent_indices)):
             path_len = 0
@@ -350,29 +330,10 @@ class GeneticEmbeddingMLP(nn.Module):
 
 
 class MaskedBCELoss(nn.Module):
-    def __init__(self, parent_indices, pos_weight, sibling_matrix=None, level_tensor=None, max_level=0):
+    def __init__(self, pos_weight, level_tensor):
         super().__init__()
-        self.latest_sibling_loss = 0
-        self.latest_base_loss = 0
-        self.max_level = max_level
         self.bce = nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
-        if level_tensor is not None:
-            self.register_buffer("level_tensor", level_tensor.clone().detach())
-        else:
-            self.register_buffer("level_tensor", torch.empty(0))
-        if sibling_matrix is not None and len(sibling_matrix) > 0:
-            self.register_buffer("sibling_matrix", torch.tensor(sibling_matrix, dtype=torch.float32))
-            num_groups = sibling_matrix.shape[0]
-            group_parents = []
-            for g_idx in range(num_groups):
-                first_child_idx = np.where(sibling_matrix[g_idx] == 1.0)[0][0]
-                parent_idx = parent_indices[first_child_idx]
-                group_parents.append(parent_idx)
-            group_levels = level_tensor[group_parents] if level_tensor is not None else torch.zeros(num_groups)
-            self.register_buffer("group_depth_weights", 1.0 + torch.log1p(group_levels.float()))
-        else:
-            self.register_buffer("sibling_matrix", torch.empty(0))
-            self.register_buffer("group_depth_weights", torch.empty(0))
+        self.register_buffer("level_tensor", level_tensor.clone().detach())
 
     def forward(self, preds, targets, masks):
         loss = self.bce(preds, targets)
@@ -382,21 +343,4 @@ class MaskedBCELoss(nn.Module):
         panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
         weighted_by_panel = masked_loss * panel_completeness
         base_loss = weighted_by_panel.sum() / (masks.sum() + 1e-8)
-        sibling_loss = torch.tensor(0.0, device=preds.device)
-        if self.sibling_matrix.numel() > 0 and self.sibling_matrix.size(0) > 0:
-            epsilon = 1e-8
-            pred_probs = torch.sigmoid(preds)
-            group_masks = torch.mm(masks, self.sibling_matrix.t()) > 0
-            if group_masks.any():
-                group_sums = torch.mm(pred_probs, self.sibling_matrix.t())
-                group_targets = torch.mm(targets, self.sibling_matrix.t())
-                target_sum_denom = group_targets.sum(dim=1, keepdim=True) + epsilon
-                norm_targets = group_targets / target_sum_denom
-                log_group_sums = torch.log(group_sums + epsilon)
-                raw_sibling_loss = - (log_group_sums * norm_targets)
-                weighted_sibling = raw_sibling_loss * self.group_depth_weights.unsqueeze(0)
-                masked_sibling = weighted_sibling * group_masks.float()
-                sibling_loss = masked_sibling.sum() / (group_masks.sum() + epsilon)
-        self.latest_base_loss = base_loss.item()
-        self.latest_sibling_loss = (config.SIBLING_PENALTY_WEIGHT * sibling_loss).item()
-        return base_loss + (config.SIBLING_PENALTY_WEIGHT * sibling_loss)
+        return base_loss

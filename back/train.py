@@ -52,17 +52,14 @@ if __name__ == '__main__':
                                          all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False)
-    input_dim = train_feat.shape[1] * 2
     output_dim = train_labels.shape[1]
     num_str_markers = train_feat.shape[1]
     pos_weight_tensor = torch.ones(output_dim, dtype=torch.float32).to(config.DEVICE)
     print("Preparing model...")
     model = classes.GeneticEmbeddingMLP(num_str_markers=num_str_markers, max_allele_val=config.MAX_ALLELE,
                                         embedding_dim=config.EMBEDDING_DIM, output_dim=output_dim,
-                                        parent_indices=topo_manager.parent_indices,
-                                        sibling_matrix=topo_manager.sibling_matrix).to(config.DEVICE)
-    criterion = classes.MaskedBCELoss(topo_manager.parent_indices, pos_weight_tensor, topo_manager.sibling_matrix,
-                                      level_tensor=model.level_tensor, max_level=model.max_level).to(config.DEVICE)
+                                        parent_indices=topo_manager.parent_indices).to(config.DEVICE)
+    criterion = classes.MaskedBCELoss(pos_weight=pos_weight_tensor, level_tensor=model.level_tensor).to(config.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)
     best_val_emr = 0.0
@@ -75,8 +72,6 @@ if __name__ == '__main__':
         train_loss = 0.0
         total_train_samples = 0
         train_stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
-        train_b_accum = 0.0
-        train_s_accum = 0.0
         for inputs, targets, masks in train_loader:
             inputs, targets, masks = inputs.to(config.DEVICE), targets.to(config.DEVICE), masks.to(config.DEVICE)
             optimizer.zero_grad()
@@ -87,13 +82,9 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            train_b_accum += criterion.latest_base_loss * batch_size
-            train_s_accum += criterion.latest_sibling_loss * batch_size
             utils.accumulate_metrics_from_batch(inputs=inputs, outputs=outputs, targets=targets, masks=masks,
                                                 stats=train_stats, lengths_standards=lengths_standards)
         train_loss /= total_train_samples
-        train_b_loss = train_b_accum / total_train_samples
-        train_s_loss = train_s_accum / total_train_samples
         train_report = ""
         for length in lengths_standards:
             c = train_stats[length]["count"] + 1e-8
@@ -102,15 +93,14 @@ if __name__ == '__main__':
             over = train_stats[length]["over"] / c
             fb = train_stats[length]["false_branch"] / c
             train_report += f" [{length} STR -> EMR: {emr:.3f}, Und: {under:.3f}, Ovr: {over:.3f}, Fls: {fb:.3f}]"
-        val_loss, val_b_loss, val_s_loss, val_emr, val_report = \
+        val_loss, val_emr, val_report = \
             utils.evaluate_model(model=model, loader=val_loader, criterion=criterion, device=config.DEVICE,
                                  lengths_standards=lengths_standards)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
         epoch_time = time.time() - start_time
         print(f"Epoch {epoch + 1:02d} | LR: {current_lr:.6f} | Time: {epoch_time:.2f}s | "
-              f"Train Loss: {train_loss:.4f} (B: {train_b_loss:.4f}, S: {train_s_loss:.4f}) | "
-              f"Valid Loss: {val_loss:.4f} (B: {val_b_loss:.4f}, S: {val_s_loss:.4f})\n"
+              f"Train Loss: {train_loss:.4f} | Valid Loss: {val_loss:.4f}\n"
               f"  TRAIN GROUPS ->{train_report}\n"
               f"  VALID GROUPS ->{val_report}")
         if val_emr > best_val_emr:
