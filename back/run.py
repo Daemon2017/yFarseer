@@ -17,13 +17,12 @@ CORS(app)
 predictor = None
 
 
-def hierarchical_predict(model, x, parent_indices, level_tensor, max_level):
+def hierarchical_predict(model, x, parent_indices, levels_list, max_level):
     model.eval()
     with torch.no_grad():
         logits = model(x)
         probs = torch.sigmoid(logits)
         batch_size = probs.size(0)
-        levels_list = level_tensor.cpu().numpy().tolist()
         final_active_mask = torch.zeros_like(probs, dtype=torch.bool)
         root_indices = [idx for idx, lvl in enumerate(levels_list) if lvl == 0]
         if root_indices:
@@ -78,6 +77,7 @@ class GeneticSingleModel:
         self.model = None
         self.sorted_snps = []
         self.parent_indices = []
+        self.levels_list = []
         self.num_str_markers = len(config.EXTENDED_STR_COLS)
         self.max_allele_val = config.MAX_ALLELE
         self.embedding_dim = config.EMBEDDING_DIM
@@ -118,26 +118,7 @@ class GeneticSingleModel:
             self.model.load_state_dict(torch.load(model_path, map_location=config.DEVICE))
             self.model.to(config.DEVICE)
             self.model.eval()
-
-    def predict_chains(self, features_matrix, masks_matrix):
-        num_samples = features_matrix.shape[0]
-        inputs = np.hstack([features_matrix, masks_matrix])
-        inputs_tensor = torch.tensor(inputs, dtype=torch.float32).to(config.DEVICE)
-        probs = hierarchical_predict(
-            self.model,
-            inputs_tensor,
-            self.parent_indices,
-            self.model.level_tensor,
-            self.model.max_level
-        ).cpu().numpy()
-        results = []
-        for i in range(num_samples):
-            sample_chain = []
-            for idx, snp_name in enumerate(self.sorted_snps):
-                if probs[i, idx] >= config.VAL_THRESHOLD:
-                    sample_chain.append((snp_name, float(probs[i, idx])))
-            results.append(sample_chain)
-        return results
+            self.levels_list = self.model.level_tensor.cpu().numpy().tolist()
 
 
 def build_recursive_tree(full_chain):
@@ -238,7 +219,7 @@ def predict_snp():
             predictor.model,
             inputs_tensor,
             predictor.parent_indices,
-            predictor.model.level_tensor,
+            predictor.levels_list,
             predictor.model.max_level
         ).cpu().numpy()[0]
         active_indices = [idx for idx, p in enumerate(probs) if p >= threshold_param]

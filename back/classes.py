@@ -271,9 +271,10 @@ class GeneticEmbeddingMLP(nn.Module):
         self.num_str_markers = num_str_markers
         self.embedding_dim = embedding_dim
         self.max_allele_val = max_allele_val
-        self.embeddings = nn.ModuleList(
-            [nn.Embedding(num_embeddings=max_allele_val, embedding_dim=embedding_dim, padding_idx=0) for _ in
-             range(num_str_markers)])
+        self.total_embeddings = nn.Embedding(num_embeddings=num_str_markers * max_allele_val,
+                                             embedding_dim=embedding_dim, padding_idx=0)
+        offsets = torch.arange(0, num_str_markers) * max_allele_val
+        self.register_buffer('offsets', offsets.unsqueeze(0), persistent=False)
         rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
         self.register_buffer('mutation_rates', torch.tensor(rates, dtype=torch.float32).unsqueeze(0), persistent=False)
         total_input_dim = num_str_markers * (embedding_dim + 4)
@@ -309,24 +310,23 @@ class GeneticEmbeddingMLP(nn.Module):
         self.max_level = max(levels) if len(levels) > 0 else 0
 
     def forward(self, x):
+        batch_size = x.size(0)
         features = x[:, :self.num_str_markers].long()
         masks = x[:, self.num_str_markers:]
-        embedded_list = []
-        for i in range(self.num_str_markers):
-            emb = self.embeddings[i](features[:, i])
-            x_val = (features[:, i].float() / float(self.max_allele_val)).unsqueeze(1)
-            rate_modifier = self.mutation_rates[:, i].unsqueeze(1)
-            frequency_scale = 1.0 / (rate_modifier * 100.0 + 1e-5)
-            sin_1 = torch.sin(x_val * 0.5 * frequency_scale)
-            cos_1 = torch.cos(x_val * 0.5 * frequency_scale)
-            sin_2 = torch.sin(x_val * 2.5 * frequency_scale)
-            cos_2 = torch.cos(x_val * 2.5 * frequency_scale)
-            geom_signal = torch.cat([sin_1, cos_1, sin_2, cos_2], dim=1)
-            geom_signal = geom_signal * masks[:, i].unsqueeze(1)
-            emb = emb * masks[:, i].unsqueeze(1)
-            emb_combined = torch.cat([emb, geom_signal], dim=1)
-            embedded_list.append(emb_combined)
-        x_emb = torch.cat(embedded_list, dim=1)
+        features_shifted = features + self.offsets
+        features_shifted = features_shifted * masks.long()
+        all_embs = self.total_embeddings(features_shifted)
+        x_val = (features.float() / float(self.max_allele_val)).unsqueeze(-1)
+        rate_modifier = self.mutation_rates.unsqueeze(-1)
+        frequency_scale = 1.0 / (rate_modifier * 100.0 + 1e-5)
+        sin_1 = torch.sin(x_val * 0.5 * frequency_scale)
+        cos_1 = torch.cos(x_val * 0.5 * frequency_scale)
+        sin_2 = torch.sin(x_val * 2.5 * frequency_scale)
+        cos_2 = torch.cos(x_val * 2.5 * frequency_scale)
+        geom_signal = torch.cat([sin_1, cos_1, sin_2, cos_2], dim=-1)
+        geom_signal = geom_signal * masks.unsqueeze(-1)
+        emb_combined = torch.cat([all_embs, geom_signal], dim=-1)
+        x_emb = emb_combined.view(batch_size, -1)
         feat1 = self.input_layer(x_emb)
         feat2_input = torch.cat([feat1, x_emb], dim=1)
         feat2 = self.hidden_layer(feat2_input)
@@ -385,15 +385,17 @@ class MaskedBCELoss(nn.Module):
         sibling_loss = torch.tensor(0.0, device=preds.device)
         if self.sibling_matrix.numel() > 0 and self.sibling_matrix.size(0) > 0:
             epsilon = 1e-8
-            group_masks = torch.matmul(masks, self.sibling_matrix.t()) > 0
-            group_sums = torch.matmul(torch.sigmoid(preds), self.sibling_matrix.t())
-            group_targets = torch.matmul(targets, self.sibling_matrix.t())
-            norm_targets = group_targets / (group_targets.sum(dim=1, keepdim=True) + epsilon)
-            log_group_sums = torch.log(group_sums + epsilon)
-            raw_sibling_loss = - (log_group_sums * norm_targets)
-            weighted_sibling = raw_sibling_loss * self.group_depth_weights.unsqueeze(0)
-            masked_sibling = weighted_sibling * group_masks.float()
+            pred_probs = torch.sigmoid(preds)
+            group_masks = torch.mm(masks, self.sibling_matrix.t()) > 0
             if group_masks.any():
+                group_sums = torch.mm(pred_probs, self.sibling_matrix.t())
+                group_targets = torch.mm(targets, self.sibling_matrix.t())
+                target_sum_denom = group_targets.sum(dim=1, keepdim=True) + epsilon
+                norm_targets = group_targets / target_sum_denom
+                log_group_sums = torch.log(group_sums + epsilon)
+                raw_sibling_loss = - (log_group_sums * norm_targets)
+                weighted_sibling = raw_sibling_loss * self.group_depth_weights.unsqueeze(0)
+                masked_sibling = weighted_sibling * group_masks.float()
                 sibling_loss = masked_sibling.sum() / (group_masks.sum() + epsilon)
         self.latest_base_loss = base_loss.item()
         self.latest_sibling_loss = (config.SIBLING_PENALTY_WEIGHT * sibling_loss).item()

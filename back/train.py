@@ -25,7 +25,8 @@ if __name__ == '__main__':
     counts = df['Haplogroup'].value_counts()
     df_singles = df[df['Haplogroup'].isin(counts[counts == 1].index)]
     df_multiples = df[df['Haplogroup'].isin(counts[counts > 1].index)]
-    df_val = df_multiples.groupby('Haplogroup', group_keys=False).apply(lambda x: x.sample(1, random_state=42))
+    df_multiples_shuffled = df_multiples.sample(frac=1, random_state=42)
+    df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
     df_train_multi = df_multiples[~df_multiples.index.isin(df_val.index)]
     df_train = pd.concat([df_train_multi, df_singles]).sample(frac=1, random_state=42).reset_index(drop=True)
     df_val = df_val.sample(frac=1, random_state=42).reset_index(drop=True)
@@ -50,7 +51,7 @@ if __name__ == '__main__':
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
                                          all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False)
     input_dim = train_feat.shape[1] * 2
     output_dim = train_labels.shape[1]
     num_str_markers = train_feat.shape[1]
