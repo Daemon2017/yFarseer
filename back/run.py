@@ -87,23 +87,6 @@ class GeneticSingleModel:
             self.sorted_snps = json.load(f)
         with open(os.path.join(config.MODEL_DIR, "parent_indices.json"), "r", encoding="utf-8") as f:
             self.parent_indices = json.load(f)
-        parent_to_children = {}
-        for child_idx, parent_idx in enumerate(self.parent_indices):
-            if parent_idx != -1:
-                if parent_idx not in parent_to_children:
-                    parent_to_children[parent_idx] = []
-                parent_to_children[parent_idx].append(child_idx)
-        sibling_groups = [children for children in parent_to_children.values() if len(children) > 1]
-        num_snps = len(self.parent_indices)
-        num_groups = len(sibling_groups)
-        if num_groups > 0:
-            sib_matrix = np.zeros((num_groups, num_snps), dtype=np.float32)
-            for g_idx, group in enumerate(sibling_groups):
-                for snp_idx in group:
-                    sib_matrix[g_idx, snp_idx] = 1.0
-            sibling_matrix = sib_matrix
-        else:
-            sibling_matrix = np.zeros((0, num_snps), dtype=np.float32)
         output_dim = len(self.sorted_snps)
         model_path = os.path.join(config.MODEL_DIR, "model_best_emr.pth")
         if os.path.exists(model_path):
@@ -113,7 +96,6 @@ class GeneticSingleModel:
                 self.embedding_dim,
                 output_dim,
                 self.parent_indices,
-                sibling_matrix
             )
             self.model.load_state_dict(torch.load(model_path, map_location=config.DEVICE))
             self.model.to(config.DEVICE)
