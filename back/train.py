@@ -37,6 +37,7 @@ if __name__ == '__main__':
     unique_train_haplogroups = df_train['Haplogroup'].unique().tolist()
     topo_manager = classes.HierarchyTopologyManager()
     topo_manager.prepare_topology(unique_train_haplogroups, topology)
+    print(f"Total SNPs: {len(topo_manager.all_snps)}")
     train_feat, train_mask = utils.build_matrices(df_train)
     val_feat, val_mask = utils.build_matrices(df_val)
     train_haplogroups = df_train['Haplogroup'].tolist()
