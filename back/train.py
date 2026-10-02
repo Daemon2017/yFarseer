@@ -71,7 +71,7 @@ if __name__ == '__main__':
         model.train()
         train_loss = 0.0
         total_train_samples = 0
-        train_stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
+        train_stats = {"exact": 0, "total_f1": 0.0, "count": 0}
         for inputs, targets, masks in train_loader:
             inputs, targets, masks = inputs.to(config.DEVICE), targets.to(config.DEVICE), masks.to(config.DEVICE)
             optimizer.zero_grad()
@@ -82,29 +82,22 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            utils.accumulate_metrics_from_batch(inputs=inputs, outputs=outputs, targets=targets, masks=masks,
-                                                stats=train_stats, lengths_standards=lengths_standards)
+            utils.accumulate_metrics_from_batch(outputs=outputs, targets=targets, masks=masks, stats=train_stats)
         train_loss /= total_train_samples
-        train_report = ""
-        for length in lengths_standards:
-            c = train_stats[length]["count"] + 1e-8
-            emr = train_stats[length]["exact"] / c
-            under = train_stats[length]["under"] / c
-            over = train_stats[length]["over"] / c
-            fb = train_stats[length]["false_branch"] / c
-            train_report += f" [{length} STR -> EMR: {emr:.3f}, Und: {under:.3f}, Ovr: {over:.3f}, Fls: {fb:.3f}]"
-        val_loss, val_emr, val_report = \
-            utils.evaluate_model(model=model, loader=val_loader, criterion=criterion, device=config.DEVICE,
-                                 lengths_standards=lengths_standards)
+        train_count = train_stats["count"] + 1e-8
+        train_emr = train_stats["exact"] / train_count
+        train_f1 = train_stats["total_f1"] / train_count
+        val_loss, val_emr, val_report = utils.evaluate_model(model=model, loader=val_loader, criterion=criterion,
+                                                             device=config.DEVICE)
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
         epoch_time = time.time() - start_time
         print(f"Epoch {epoch + 1:02d} | LR: {current_lr:.6f} | Time: {epoch_time:.2f}s | "
               f"Train Loss: {train_loss:.4f} | Valid Loss: {val_loss:.4f}\n"
-              f"  TRAIN GROUPS ->{train_report}\n"
-              f"  VALID GROUPS ->{val_report}")
+              f"  TRAIN -> Global EMR: {train_emr:.4f} | Path-level F1: {train_f1:.4f}\n"
+              f"  VALID -> {val_report}")
         if val_emr > best_val_emr:
             best_val_emr = val_emr
             best_model_path = os.path.join(config.MODEL_DIR, "model_best_emr.pth")
             torch.save(model.state_dict(), best_model_path)
-            print(f"  --> Сохранена новая лучшая модель с VALID EMR (111 STR): {best_val_emr:.4f}")
+            print(f"  --> Сохранена новая лучшая модель с VALID GLOBAL EMR: {best_val_emr:.4f}")

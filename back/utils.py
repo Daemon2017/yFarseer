@@ -43,42 +43,33 @@ def build_matrices(df):
     return features.astype(np.int64), masks
 
 
-def accumulate_metrics_from_batch(inputs, outputs, targets, masks, stats, lengths_standards, force_length=None):
-    num_features = inputs.size(1) // 2
+def accumulate_metrics_from_batch(outputs, targets, masks, stats):
     preds = (torch.sigmoid(outputs) > config.TRAIN_THRESHOLD).float()
     active_preds = preds * masks
     active_targets = targets * masks
     fps = ((active_preds == 1.0) & (active_targets == 0.0)).sum(dim=1)
     fns = ((active_preds == 0.0) & (active_targets == 1.0)).sum(dim=1)
-    if force_length is not None:
-        assigned_standards = torch.full((inputs.size(0),), force_length, dtype=torch.long, device=inputs.device)
-    else:
-        mask_vals = inputs[:, num_features:]
-        sample_lengths = mask_vals.sum(dim=1).long()
-        assigned_standards = torch.zeros_like(sample_lengths)
-        assigned_standards = torch.where(sample_lengths <= 12, 12, assigned_standards)
-        assigned_standards = torch.where((sample_lengths > 12) & (sample_lengths <= 25), 25, assigned_standards)
-        assigned_standards = torch.where((sample_lengths > 25) & (sample_lengths <= 37), 37, assigned_standards)
-        assigned_standards = torch.where((sample_lengths > 37) & (sample_lengths <= 67), 67, assigned_standards)
-        assigned_standards = torch.where(sample_lengths > 67, 111, assigned_standards)
-    for length in lengths_standards:
-        length_mask = (assigned_standards == length)
-        if not length_mask.any():
-            continue
-        sub_fps = fps[length_mask]
-        sub_fns = fns[length_mask]
-        stats[length]["exact"] += ((sub_fps == 0) & (sub_fns == 0)).sum().item()
-        stats[length]["under"] += ((sub_fps == 0) & (sub_fns > 0)).sum().item()
-        stats[length]["over"] += ((sub_fps > 0) & (sub_fns == 0)).sum().item()
-        stats[length]["false_branch"] += ((sub_fps > 0) & (sub_fns > 0)).sum().item()
-        stats[length]["count"] += length_mask.sum().item()
+    exact_matches = ((fps == 0) & (fns == 0)).sum().item()
+    tp = (active_preds * active_targets).sum(dim=1)
+    pred_count = active_preds.sum(dim=1)
+    target_count = active_targets.sum(dim=1)
+    precision = tp / (pred_count + 1e-8)
+    recall = tp / (target_count + 1e-8)
+    f1_path = 2 * (precision * recall) / (precision + recall + 1e-8)
+    stats["exact"] += exact_matches
+    stats["total_f1"] += f1_path.sum().item()
+    stats["count"] += inputs_size_helper(outputs)
 
 
-def evaluate_model(model, loader, criterion, device, lengths_standards):
+def inputs_size_helper(tensor):
+    return tensor.size(0)
+
+
+def evaluate_model(model, loader, criterion, device):
     model.eval()
     total_loss = 0.0
     total_samples = 0
-    stats = {l: {"exact": 0, "under": 0, "over": 0, "false_branch": 0, "count": 0} for l in lengths_standards}
+    stats = {"exact": 0, "total_f1": 0.0, "count": 0}
     with torch.no_grad():
         for inputs, labels, masks in loader:
             inputs, labels, masks = inputs.to(device), labels.to(device), masks.to(device)
@@ -87,30 +78,13 @@ def evaluate_model(model, loader, criterion, device, lengths_standards):
             outputs = model(inputs)
             loss = criterion(outputs, labels, masks)
             total_loss += loss.item() * batch_size
-            num_features = inputs.size(1) // 2
-            base_feat = inputs[:, :num_features]
-            base_mask = inputs[:, num_features:]
-            for length in lengths_standards:
-                feat_sub = base_feat.clone()
-                mask_sub = base_mask.clone()
-                if length < num_features:
-                    feat_sub[:, length:] = 0.0
-                    mask_sub[:, length:] = 0.0
-                inputs_sub = torch.hstack([feat_sub, mask_sub])
-                outputs_sub = model(inputs_sub)
-                accumulate_metrics_from_batch(inputs=inputs_sub, outputs=outputs_sub, targets=labels, masks=masks,
-                                              stats=stats, lengths_standards=lengths_standards, force_length=length)
+            accumulate_metrics_from_batch(outputs=outputs, targets=labels, masks=masks, stats=stats)
     mean_loss = total_loss / (total_samples + 1e-8)
-    val_emr = stats[111]["exact"] / (stats[111]["count"] + 1e-8)
-    report_str = ""
-    for length in lengths_standards:
-        c = stats[length]["count"] + 1e-8
-        emr = stats[length]["exact"] / c
-        under = stats[length]["under"] / c
-        over = stats[length]["over"] / c
-        fb = stats[length]["false_branch"] / c
-        report_str += f" [{length} STR -> EMR: {emr:.3f}, Und: {under:.3f}, Ovr: {over:.3f}, Fls: {fb:.3f}]"
-    return mean_loss, val_emr, report_str
+    total_count = stats["count"] + 1e-8
+    global_emr = stats["exact"] / total_count
+    mean_f1 = stats["total_f1"] / total_count
+    report_str = f"Global EMR: {global_emr:.4f} | Path-level F1: {mean_f1:.4f}"
+    return mean_loss, global_emr, report_str
 
 
 def get_snp_to_tmrca(data):

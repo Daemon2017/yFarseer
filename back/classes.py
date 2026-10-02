@@ -153,11 +153,8 @@ class GeneticDataset(Dataset):
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
-        shuffled_indices = np.random.permutation(num_samples)
-        splits = np.array_split(shuffled_indices, 5)
-        lengths = [12, 25, 37, 67, 111]
-        for split, length in zip(splits, lengths):
-            self.assigned_lengths[split] = length
+        beta_samples = np.random.beta(config.BETA_A, config.BETA_B, size=num_samples)
+        self.assigned_lengths = 0.1 + (beta_samples * 0.9)
 
     def __len__(self):
         return len(self.base_features)
@@ -170,21 +167,16 @@ class GeneticDataset(Dataset):
             feat = self.base_features[idx].astype(np.float32)
             mask = self.masks[idx].astype(np.float32)
         cols = config.EXTENDED_STR_COLS
-        chosen_length = self.assigned_lengths[idx] if self.is_training else self.num_features
-        use_389_sync = (self.idx_389i is not None and self.idx_389ii is not None and
-                        self.idx_389i < chosen_length and self.idx_389ii < chosen_length and
-                        mask[self.idx_389i] == 1.0 and mask[self.idx_389ii] == 1.0)
+        use_389_sync = (self.idx_389i is not None and self.idx_389ii is not None
+                        and mask[self.idx_389i] == 1.0 and mask[self.idx_389ii] == 1.0)
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389ii] - feat[self.idx_389i]
         if self.is_training:
-            if chosen_length < self.num_features:
-                feat[chosen_length:] = 0.0
-                mask[chosen_length:] = 0.0
-            if use_389_sync:
-                valid_indices = np.where(
-                    (mask == 1.0) & ((feat > 1.0) | (np.arange(len(feat)) == self.idx_389ii)) & (~np.isnan(feat)))[0]
-            else:
-                valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
+            keep_ratio = self.assigned_lengths[idx]
+            dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
+            mask = mask * dropout_mask
+            feat = feat * mask
+            valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
                 current_labels = self.labels[idx]
                 active_snp_indices = np.where(current_labels == 1.0)[0]
@@ -198,15 +190,13 @@ class GeneticDataset(Dataset):
                         tmrca_years = interval
                 tmrca_years = max(100.0, tmrca_years)
                 time_scale = tmrca_years / 500.0
-                vals, base_probs = config.MUTATION_DISTRIBUTIONS[chosen_length]
-                base_expected = np.sum(np.array(vals) * np.array(base_probs))
-                target_expected = base_expected * time_scale
-                adapted_probs = []
-                for v in vals:
-                    p = (target_expected ** v) * math.exp(-target_expected) / math.factorial(v)
-                    adapted_probs.append(p)
+                active_markers_count = np.sum(mask == 1.0)
+                generations = tmrca_years / 30.0
+                target_expected = active_markers_count * 0.002 * generations
+                vals = [0, 1, 2, 3, 4, 5]
+                adapted_probs = [(target_expected ** v) * math.exp(-target_expected) / math.factorial(v) for v in vals]
                 prob_sum = sum(adapted_probs)
-                adapted_probs = [p / prob_sum for p in adapted_probs] if prob_sum > 0 else base_probs
+                adapted_probs = [p / prob_sum for p in adapted_probs] if prob_sum > 0 else [1.0, 0, 0, 0, 0, 0]
                 num_mutations = int(np.random.choice(vals, p=adapted_probs))
                 num_mutations = min(num_mutations, len(valid_indices))
                 lvl_rates = self.mutation_rates_array[valid_indices]
@@ -227,8 +217,7 @@ class GeneticDataset(Dataset):
                         if step >= 10.0:
                             break
                     direction = np.random.choice([1.0, -1.0])
-                    mutation_value = step * direction
-                    feat[col] += mutation_value
+                    feat[col] += step * direction
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389i] + feat[self.idx_389ii]
         for base_col, expected_len in config.MULTICOPIES.items():
@@ -236,9 +225,8 @@ class GeneticDataset(Dataset):
             sub_cols = [f"{base_col}{suf}" for suf in suffixes]
             try:
                 start_idx = cols.index(sub_cols[0])
-                end_idx = start_idx + expected_len
-                if start_idx < chosen_length:
-                    actual_end = min(end_idx, chosen_length)
+                if start_idx < self.num_features:
+                    actual_end = min(start_idx + expected_len, self.num_features)
                     feat[start_idx:actual_end] = np.sort(feat[start_idx:actual_end])
             except ValueError:
                 continue
