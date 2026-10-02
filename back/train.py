@@ -51,8 +51,10 @@ if __name__ == '__main__':
                                            parent_indices=topo_manager.parent_indices)
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
                                          all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False)
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True, num_workers=0,
+                              pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False, num_workers=0,
+                            pin_memory=True)
     output_dim = train_labels.shape[1]
     num_str_markers = train_feat.shape[1]
     pos_weight_tensor = torch.ones(output_dim, dtype=torch.float32).to(config.DEVICE)
@@ -83,7 +85,8 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            utils.accumulate_metrics_from_batch(outputs=outputs, targets=targets, masks=masks, stats=train_stats)
+            utils.accumulate_metrics_from_batch(outputs=outputs.detach(), targets=targets, masks=masks,
+                                                stats=train_stats)
         train_loss /= total_train_samples
         train_count = train_stats["count"] + 1e-8
         train_emr = train_stats["exact"] / train_count
