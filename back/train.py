@@ -69,7 +69,7 @@ if __name__ == '__main__':
     lengths_standards = [12, 25, 37, 67, 111]
     print("Ready to epochs...")
     for epoch in range(config.EPOCHS):
-        start_time = time.time()
+        train_start_time = time.time()
         train_dataset.update_epoch_augmentation()
         model.train()
         train_loss = 0.0
@@ -91,12 +91,15 @@ if __name__ == '__main__':
         train_count = train_stats["count"] + 1e-8
         train_emr = train_stats["exact"] / train_count
         train_f1 = train_stats["total_f1"] / train_count
+        train_finish_time = time.time() - train_start_time
+        val_start_time = time.time()
         val_loss, val_emr, val_report = utils.evaluate_model(model=model, loader=val_loader, criterion=criterion,
                                                              device=config.DEVICE)
         scheduler.step()
+        val_finish_time = time.time() - val_start_time
         current_lr = scheduler.get_last_lr()[0]
-        epoch_time = time.time() - start_time
-        print(f"Epoch {epoch + 1:02d} | LR: {current_lr:.6f} | Time: {epoch_time:.2f}s | "
+        print(f"Epoch {epoch + 1:02d} | LR: {current_lr:.6f} | "
+              f"Train Time: {train_finish_time:.2f}s | Valid Time: {val_finish_time:.2f}s | "
               f"Train Loss: {train_loss:.4f} | Valid Loss: {val_loss:.4f}\n"
               f"  TRAIN -> Global EMR: {train_emr:.4f} | Path-level F1: {train_f1:.4f}\n"
               f"  VALID -> {val_report}")
