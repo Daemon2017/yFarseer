@@ -66,7 +66,6 @@ if __name__ == '__main__':
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)
     best_val_emr = 0.0
-    lengths_standards = [12, 25, 37, 67, 111]
     print("Ready to epochs...")
     for epoch in range(config.EPOCHS):
         train_start_time = time.time()
