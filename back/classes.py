@@ -4,7 +4,6 @@ import os
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.utils.data import Dataset
 
@@ -151,21 +150,6 @@ class GeneticDataset(Dataset):
                 else:
                     interval = 1985.0 - age
                 self.snp_evolution_intervals[snp_name] = max(0.0, interval)
-        self.cached_tmrca_intervals = np.zeros(len(features), dtype=np.float32)
-        if self.is_training and self.all_snps:
-            print("Pre-calculating evolutionary scales for dataset...")
-            for idx in range(len(features)):
-                current_labels = self.labels[idx]
-                active_snp_indices = np.where(current_labels == 1.0)[0]
-                tmrca_years = 500.0
-                if len(active_snp_indices) > 0:
-                    active_levels = self.snp_levels[active_snp_indices]
-                    deepest_local_idx = active_snp_indices[np.argmax(active_levels)]
-                    last_snp_name = self.all_snps[deepest_local_idx]
-                    interval = self.snp_evolution_intervals.get(last_snp_name)
-                    if interval is not None:
-                        tmrca_years = interval
-                self.cached_tmrca_intervals[idx] = max(100.0, tmrca_years)
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
@@ -194,7 +178,17 @@ class GeneticDataset(Dataset):
             feat = feat * mask
             valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
-                tmrca_years = self.cached_tmrca_intervals[idx]
+                current_labels = self.labels[idx]
+                active_snp_indices = np.where(current_labels == 1.0)[0]
+                tmrca_years = 500.0
+                if len(active_snp_indices) > 0 and self.all_snps:
+                    active_levels = self.snp_levels[active_snp_indices]
+                    deepest_local_idx = active_snp_indices[np.argmax(active_levels)]
+                    last_snp_name = self.all_snps[deepest_local_idx]
+                    interval = self.snp_evolution_intervals.get(last_snp_name)
+                    if interval is not None:
+                        tmrca_years = interval
+                tmrca_years = max(100.0, tmrca_years)
                 time_scale = tmrca_years / 500.0
                 active_markers_count = np.sum(mask == 1.0)
                 generations = tmrca_years / 30.0
@@ -282,17 +276,6 @@ class GeneticEmbeddingMLP(nn.Module):
             levels[i] = path_len
         self.register_buffer('level_tensor', torch.tensor(levels, dtype=torch.long), persistent=False)
         self.max_level = max(levels) if len(levels) > 0 else 0
-        self.child_indices_by_level = []
-        self.parent_indices_by_level = []
-        for level in range(1, self.max_level + 1):
-            child_idxs = [idx for idx, lvl in enumerate(levels) if lvl == level]
-            if child_idxs:
-                parent_idxs = [parent_indices[c_idx] for c_idx in child_idxs]
-                self.register_buffer(f'children_lvl_{level}', torch.tensor(child_idxs, dtype=torch.long),
-                                     persistent=False)
-                self.register_buffer(f'parents_lvl_{level}', torch.tensor(parent_idxs, dtype=torch.long),
-                                     persistent=False)
-                self.child_indices_by_level.append(level)
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -318,14 +301,17 @@ class GeneticEmbeddingMLP(nn.Module):
         combined = torch.cat([feat2, feat1, x_emb], dim=1)
         combined = self.final_dropout(combined)
         logits = self.output_layer(combined)
-        log_probs = F.logsigmoid(logits) if hasattr(torch.nn.functional, 'logsigmoid') else torch.log(
-            torch.sigmoid(logits) + 1e-7)
-        for level in self.child_indices_by_level:
-            child_indices = getattr(self, f'children_lvl_{level}')
-            parent_indices = getattr(self, f'parents_lvl_{level}')
-            log_probs[:, child_indices] = log_probs[:, child_indices] + log_probs[:, parent_indices]
+        probs = torch.sigmoid(logits)
+        hierarchical_probs = probs.clone()
+        for level in range(1, self.max_level + 1):
+            mask_level = (self.level_tensor == level)
+            if not mask_level.any():
+                continue
+            child_indices = torch.where(mask_level)[0]
+            parent_indices = self.parent_tensor[child_indices]
+            hierarchical_probs[:, child_indices] = hierarchical_probs[:, child_indices] * \
+                                                   hierarchical_probs[:, parent_indices]
         eps = 1e-7
-        hierarchical_probs = torch.exp(log_probs)
         hierarchical_probs = torch.clamp(hierarchical_probs, min=eps, max=1.0 - eps)
         hierarchical_logits = torch.log(hierarchical_probs / (1.0 - hierarchical_probs))
         return hierarchical_logits
