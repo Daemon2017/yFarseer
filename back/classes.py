@@ -153,8 +153,8 @@ class GeneticDataset(Dataset):
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
-        beta_samples = np.random.beta(config.BETA_A, config.BETA_B, size=num_samples)
-        self.assigned_lengths = 0.1 + (beta_samples * 0.9)
+        uniform_samples = np.random.rand(num_samples)
+        self.assigned_lengths = 0.1 + (uniform_samples * 0.9)
 
     def __len__(self):
         return len(self.base_features)

@@ -1,6 +1,6 @@
 import torch
 
-HAPLOTYPES_FILE = 'real_haplotypes.csv'
+HAPLOTYPES_FILE = 'real_haplotypes2.csv'
 DATES_FILE = 'dates_tree.json'
 TOPOLOGY_FILE = 'topology_tree.json'
 MODEL_DIR = 'models'
@@ -13,9 +13,6 @@ EMBEDDING_DIM = 16
 MAX_ALLELE = 50
 TRAIN_THRESHOLD = 0.5
 VAL_THRESHOLD = 0.1
-
-BETA_A = 1.0
-BETA_B = 1.0
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
