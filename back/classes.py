@@ -265,18 +265,6 @@ class GeneticEmbeddingMLP(nn.Module):
         final_mlp_dim = (config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim
         self.final_dropout = nn.Dropout(0.3)
         self.output_layer = nn.Linear(final_mlp_dim, output_dim)
-        row_indices = []
-        col_indices = []
-        for i in range(output_dim):
-            curr = parent_indices[i]
-            while curr != -1:
-                row_indices.append(i)
-                col_indices.append(curr)
-                curr = parent_indices[curr]
-        indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
-        values = torch.ones(len(row_indices), dtype=torch.float32)
-        sparse_ancestry = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
-        self.register_buffer('ancestry_matrix', sparse_ancestry, persistent=False)
         levels = [-1] * len(parent_indices)
         for i in range(len(parent_indices)):
             path_len = 0
@@ -307,29 +295,38 @@ class GeneticEmbeddingMLP(nn.Module):
         feat1 = self.input_layer(x_emb)
         feat2 = self.hidden_layer(torch.cat([feat1, x_emb], dim=1))
         combined = self.final_dropout(torch.cat([feat2, feat1, x_emb], dim=1))
-        logits = self.output_layer(combined)
-        probs = torch.sigmoid(logits)
-        eps = 1e-7
-        log_probs = torch.log(probs + eps)
-        hierarchical_log_probs = log_probs + torch.sparse.mm(self.ancestry_matrix, log_probs.t()).t()
-        hierarchical_probs = torch.exp(hierarchical_log_probs)
-        hierarchical_probs = torch.clamp(hierarchical_probs, min=eps, max=1.0 - eps)
-        hierarchical_logits = torch.log(hierarchical_probs / (1.0 - hierarchical_probs))
-        return hierarchical_logits
+        return self.output_layer(combined)
 
 
 class MaskedBCELoss(nn.Module):
-    def __init__(self, pos_weight, level_tensor):
+    def __init__(self, pos_weight, level_tensor, parent_indices):
         super().__init__()
-        self.bce = nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
+        self.register_buffer("pos_weight", pos_weight.clone().detach().unsqueeze(0))
         self.register_buffer("level_tensor", level_tensor.clone().detach())
+        output_dim = len(parent_indices)
+        row_indices = []
+        col_indices = []
+        for i in range(output_dim):
+            curr = parent_indices[i]
+            while curr != -1:
+                row_indices.append(i)
+                col_indices.append(curr)
+                curr = parent_indices[curr]
+        indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
+        values = torch.ones(len(row_indices), dtype=torch.float32)
+        sparse_ancestry = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
+        self.register_buffer('ancestry_matrix', sparse_ancestry, persistent=False)
 
-    def forward(self, preds, targets, masks):
-        loss = self.bce(preds, targets)
+    def forward(self, logits, targets, masks):
+        eps = 1e-7
+        probs_raw = torch.sigmoid(logits)
+        log_probs_raw = torch.log(probs_raw + eps)
+        hierarchical_log_probs = log_probs_raw + torch.sparse.mm(self.ancestry_matrix, log_probs_raw.t()).t()
+        p_h = torch.clamp(torch.exp(hierarchical_log_probs), min=eps, max=1.0 - eps)
+        loss = - (self.pos_weight * targets * torch.log(p_h) + (1.0 - targets) * torch.log(1.0 - p_h))
         depth_multipliers = 1.0 + torch.log1p(self.level_tensor.float())
         weighted_loss = loss * depth_multipliers.unsqueeze(0)
         masked_loss = weighted_loss * masks
         panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
         weighted_by_panel = masked_loss * panel_completeness
-        base_loss = weighted_by_panel.sum() / (masks.sum() + 1e-8)
-        return base_loss
+        return weighted_by_panel.sum() / (masks.sum() + 1e-8)

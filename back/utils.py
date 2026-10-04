@@ -72,13 +72,21 @@ def evaluate_model(model, loader, criterion, device):
     stats = {"exact": 0, "total_f1": 0.0, "count": 0}
     with torch.no_grad():
         for inputs, labels, masks in loader:
-            inputs, labels, masks = inputs.to(device), labels.to(device), masks.to(device)
+            inputs = inputs.to(device)
+            labels = labels.to(device).float()
+            masks = masks.to(device).float()
             batch_size = inputs.size(0)
             total_samples += batch_size
             outputs = model(inputs)
             loss = criterion(outputs, labels, masks)
             total_loss += loss.item() * batch_size
-            accumulate_metrics_from_batch(outputs=outputs, targets=labels, masks=masks, stats=stats)
+            probs_raw = torch.sigmoid(outputs)
+            log_probs_raw = torch.log(probs_raw + 1e-7)
+            h_log_probs = log_probs_raw + torch.sparse.mm(criterion.ancestry_matrix, log_probs_raw.t()).t()
+            h_probs = torch.exp(h_log_probs)
+            h_probs = torch.clamp(h_probs, min=1e-7, max=1.0 - 1e-7)
+            simulated_outputs = torch.log(h_probs / (1.0 - h_probs))
+            accumulate_metrics_from_batch(outputs=simulated_outputs, targets=labels, masks=masks, stats=stats)
     mean_loss = total_loss / (total_samples + 1e-8)
     total_count = stats["count"] + 1e-8
     global_emr = stats["exact"] / total_count

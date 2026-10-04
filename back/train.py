@@ -62,7 +62,9 @@ if __name__ == '__main__':
     model = classes.GeneticEmbeddingMLP(num_str_markers=num_str_markers, max_allele_val=config.MAX_ALLELE,
                                         embedding_dim=config.EMBEDDING_DIM, output_dim=output_dim,
                                         parent_indices=topo_manager.parent_indices).to(config.DEVICE)
-    criterion = classes.MaskedBCELoss(pos_weight=pos_weight_tensor, level_tensor=model.level_tensor).to(config.DEVICE)
+    print(f"Maximum tree depth: {model.max_level} SNPs")
+    criterion = classes.MaskedBCELoss(pos_weight=pos_weight_tensor, level_tensor=model.level_tensor,
+                                      parent_indices=topo_manager.parent_indices).to(config.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)
     best_val_emr = 0.0
@@ -75,7 +77,9 @@ if __name__ == '__main__':
         total_train_samples = 0
         train_stats = {"exact": 0, "total_f1": 0.0, "count": 0}
         for inputs, targets, masks in train_loader:
-            inputs, targets, masks = inputs.to(config.DEVICE), targets.to(config.DEVICE), masks.to(config.DEVICE)
+            inputs = inputs.to(config.DEVICE)
+            targets = targets.to(config.DEVICE).float()
+            masks = masks.to(config.DEVICE).float()
             optimizer.zero_grad()
             outputs = model(inputs)
             loss = criterion(outputs, targets, masks)
@@ -84,7 +88,14 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            utils.accumulate_metrics_from_batch(outputs=outputs.detach(), targets=targets, masks=masks,
+            with torch.no_grad():
+                probs_raw = torch.sigmoid(outputs)
+                log_probs_raw = torch.log(probs_raw + 1e-7)
+                h_log_probs = log_probs_raw + torch.sparse.mm(criterion.ancestry_matrix, log_probs_raw.t()).t()
+                h_probs = torch.exp(h_log_probs)
+                h_probs = torch.clamp(h_probs, min=1e-7, max=1.0 - 1e-7)
+                simulated_outputs = torch.log(h_probs / (1.0 - h_probs))
+            utils.accumulate_metrics_from_batch(outputs=simulated_outputs, targets=targets, masks=masks,
                                                 stats=train_stats)
         train_loss /= total_train_samples
         train_count = train_stats["count"] + 1e-8
