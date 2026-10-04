@@ -265,7 +265,18 @@ class GeneticEmbeddingMLP(nn.Module):
         final_mlp_dim = (config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim
         self.final_dropout = nn.Dropout(0.3)
         self.output_layer = nn.Linear(final_mlp_dim, output_dim)
-        self.register_buffer('parent_tensor', torch.tensor(parent_indices, dtype=torch.long), persistent=False)
+        row_indices = []
+        col_indices = []
+        for i in range(output_dim):
+            curr = parent_indices[i]
+            while curr != -1:
+                row_indices.append(i)
+                col_indices.append(curr)
+                curr = parent_indices[curr]
+        indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
+        values = torch.ones(len(row_indices), dtype=torch.float32)
+        sparse_ancestry = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
+        self.register_buffer('ancestry_matrix', sparse_ancestry, persistent=False)
         levels = [-1] * len(parent_indices)
         for i in range(len(parent_indices)):
             path_len = 0
@@ -281,37 +292,27 @@ class GeneticEmbeddingMLP(nn.Module):
         batch_size = x.size(0)
         features = x[:, :self.num_str_markers].long()
         masks = x[:, self.num_str_markers:]
-        features_shifted = features + self.offsets
-        features_shifted = features_shifted * masks.long()
+        features_shifted = (features + self.offsets) * masks.long()
         all_embs = self.total_embeddings(features_shifted)
         x_val = (features.float() / float(self.max_allele_val)).unsqueeze(-1)
         rate_modifier = self.mutation_rates.unsqueeze(-1)
         frequency_scale = 1.0 / (rate_modifier * 100.0 + 1e-5)
-        sin_1 = torch.sin(x_val * 0.5 * frequency_scale)
-        cos_1 = torch.cos(x_val * 0.5 * frequency_scale)
-        sin_2 = torch.sin(x_val * 2.5 * frequency_scale)
-        cos_2 = torch.cos(x_val * 2.5 * frequency_scale)
-        geom_signal = torch.cat([sin_1, cos_1, sin_2, cos_2], dim=-1)
-        geom_signal = geom_signal * masks.unsqueeze(-1)
-        emb_combined = torch.cat([all_embs, geom_signal], dim=-1)
-        x_emb = emb_combined.view(batch_size, -1)
+        geom_signal = torch.cat([
+            torch.sin(x_val * 0.5 * frequency_scale),
+            torch.cos(x_val * 0.5 * frequency_scale),
+            torch.sin(x_val * 2.5 * frequency_scale),
+            torch.cos(x_val * 2.5 * frequency_scale)
+        ], dim=-1) * masks.unsqueeze(-1)
+        x_emb = torch.cat([all_embs, geom_signal], dim=-1).view(batch_size, -1)
         feat1 = self.input_layer(x_emb)
-        feat2_input = torch.cat([feat1, x_emb], dim=1)
-        feat2 = self.hidden_layer(feat2_input)
-        combined = torch.cat([feat2, feat1, x_emb], dim=1)
-        combined = self.final_dropout(combined)
+        feat2 = self.hidden_layer(torch.cat([feat1, x_emb], dim=1))
+        combined = self.final_dropout(torch.cat([feat2, feat1, x_emb], dim=1))
         logits = self.output_layer(combined)
         probs = torch.sigmoid(logits)
-        hierarchical_probs = probs.clone()
-        for level in range(1, self.max_level + 1):
-            mask_level = (self.level_tensor == level)
-            if not mask_level.any():
-                continue
-            child_indices = torch.where(mask_level)[0]
-            parent_indices = self.parent_tensor[child_indices]
-            hierarchical_probs[:, child_indices] = hierarchical_probs[:, child_indices] * \
-                                                   hierarchical_probs[:, parent_indices]
         eps = 1e-7
+        log_probs = torch.log(probs + eps)
+        hierarchical_log_probs = log_probs + torch.sparse.mm(self.ancestry_matrix, log_probs.t()).t()
+        hierarchical_probs = torch.exp(hierarchical_log_probs)
         hierarchical_probs = torch.clamp(hierarchical_probs, min=eps, max=1.0 - eps)
         hierarchical_logits = torch.log(hierarchical_probs / (1.0 - hierarchical_probs))
         return hierarchical_logits
