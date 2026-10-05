@@ -262,9 +262,7 @@ class GeneticEmbeddingMLP(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.3)
         )
-        final_mlp_dim = (config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim
-        self.final_dropout = nn.Dropout(0.3)
-        self.output_layer = nn.Linear(final_mlp_dim, output_dim)
+        self.output_layer = nn.Linear((config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim, output_dim)
         levels = [-1] * len(parent_indices)
         for i in range(len(parent_indices)):
             path_len = 0
@@ -294,8 +292,7 @@ class GeneticEmbeddingMLP(nn.Module):
         x_emb = torch.cat([all_embs, geom_signal], dim=-1).view(batch_size, -1)
         feat1 = self.input_layer(x_emb)
         feat2 = self.hidden_layer(torch.cat([feat1, x_emb], dim=1))
-        combined = self.final_dropout(torch.cat([feat2, feat1, x_emb], dim=1))
-        return self.output_layer(combined)
+        return self.output_layer(torch.cat([feat2, feat1, x_emb], dim=1))
 
 
 class MaskedBCELoss(nn.Module):
