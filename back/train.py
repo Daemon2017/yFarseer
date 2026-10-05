@@ -51,10 +51,13 @@ if __name__ == '__main__':
                                            parent_indices=topo_manager.parent_indices)
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
                                          all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True, num_workers=0,
-                              pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False, num_workers=0,
-                            pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True, num_workers=1,
+                              pin_memory=True, persistent_workers=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False, num_workers=1,
+                            pin_memory=True, persistent_workers=True)
+    cached_val_batches = []
+    for inputs, labels, masks in val_loader:
+        cached_val_batches.append((inputs, labels.float(), masks.float()))
     output_dim = train_labels.shape[1]
     num_str_markers = train_feat.shape[1]
     pos_weight_tensor = torch.ones(output_dim, dtype=torch.float32).to(config.DEVICE)
@@ -88,23 +91,16 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            with torch.no_grad():
-                probs_raw = torch.sigmoid(outputs)
-                log_probs_raw = torch.log(probs_raw + 1e-7)
-                h_log_probs = log_probs_raw + torch.sparse.mm(criterion.ancestry_matrix, log_probs_raw.t()).t()
-                h_probs = torch.exp(h_log_probs)
-                h_probs = torch.clamp(h_probs, min=1e-7, max=1.0 - 1e-7)
-                simulated_outputs = torch.log(h_probs / (1.0 - h_probs))
-            utils.accumulate_metrics_from_batch(outputs=simulated_outputs, targets=targets, masks=masks,
-                                                stats=train_stats)
+            utils.accumulate_metrics_from_batch(outputs=outputs, targets=targets, masks=masks, stats=train_stats,
+                                                criterion=criterion)
         train_loss /= total_train_samples
         train_count = train_stats["count"] + 1e-8
         train_emr = train_stats["exact"] / train_count
         train_f1 = train_stats["total_f1"] / train_count
         train_finish_time = time.time() - train_start_time
         val_start_time = time.time()
-        val_loss, val_emr, val_report = utils.evaluate_model(model=model, loader=val_loader, criterion=criterion,
-                                                             device=config.DEVICE)
+        val_loss, val_emr, val_report = utils.evaluate_model(model=model, loader=cached_val_batches,
+                                                             criterion=criterion, device=config.DEVICE)
         scheduler.step()
         val_finish_time = time.time() - val_start_time
         current_lr = scheduler.get_last_lr()[0]

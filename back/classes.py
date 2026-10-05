@@ -324,9 +324,8 @@ class MaskedBCELoss(nn.Module):
         hierarchical_log_probs = log_probs_raw + torch.sparse.mm(self.ancestry_matrix, log_probs_raw.t()).t()
         p_h = torch.clamp(torch.exp(hierarchical_log_probs), min=eps, max=1.0 - eps)
         loss = - (self.pos_weight * targets * torch.log(p_h) + (1.0 - targets) * torch.log(1.0 - p_h))
-        depth_multipliers = 1.0 + torch.log1p(self.level_tensor.float())
-        weighted_loss = loss * depth_multipliers.unsqueeze(0)
-        masked_loss = weighted_loss * masks
+        loss *= (1.0 + torch.log1p(self.level_tensor.float())).unsqueeze(0)
+        loss *= masks
         panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
-        weighted_by_panel = masked_loss * panel_completeness
-        return weighted_by_panel.sum() / (masks.sum() + 1e-8)
+        loss *= panel_completeness
+        return loss.sum() / (masks.sum() + 1e-8)

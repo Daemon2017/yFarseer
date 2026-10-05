@@ -43,7 +43,14 @@ def build_matrices(df):
     return features.astype(np.int64), masks
 
 
-def accumulate_metrics_from_batch(outputs, targets, masks, stats):
+def accumulate_metrics_from_batch(outputs, targets, masks, stats, criterion=None):
+    if criterion is not None:
+        with torch.no_grad():
+            probs_raw = torch.sigmoid(outputs)
+            log_probs_raw = torch.log(probs_raw + 1e-7)
+            h_log_probs = log_probs_raw + torch.sparse.mm(criterion.ancestry_matrix, log_probs_raw.t()).t()
+            h_probs = torch.clamp(torch.exp(h_log_probs), min=1e-7, max=1.0 - 1e-7)
+            outputs = torch.log(h_probs / (1.0 - h_probs))
     preds = (torch.sigmoid(outputs) > config.TRAIN_THRESHOLD).float()
     active_preds = preds * masks
     active_targets = targets * masks
@@ -70,11 +77,17 @@ def evaluate_model(model, loader, criterion, device):
     total_loss = 0.0
     total_samples = 0
     stats = {"exact": 0, "total_f1": 0.0, "count": 0}
+    is_cached = isinstance(loader, list)
     with torch.no_grad():
-        for inputs, labels, masks in loader:
-            inputs = inputs.to(device)
-            labels = labels.to(device).float()
-            masks = masks.to(device).float()
+        for inputs, labels, masks in (loader if is_cached else loader):
+            if is_cached:
+                inputs = inputs.to(device)
+                labels = labels.to(device)
+                masks = masks.to(device)
+            else:
+                inputs = inputs.to(device)
+                labels = labels.to(device).float()
+                masks = masks.to(device).float()
             batch_size = inputs.size(0)
             total_samples += batch_size
             outputs = model(inputs)
