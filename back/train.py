@@ -48,9 +48,12 @@ if __name__ == '__main__':
     print("Preparing datasets...")
     train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True,
                                            all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
-                                           parent_indices=topo_manager.parent_indices)
+                                           parent_indices=topo_manager.parent_indices,
+                                           snp_levels=topo_manager.snp_levels)
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
-                                         all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
+                                         all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
+                                         parent_indices=topo_manager.parent_indices,
+                                         snp_levels=topo_manager.snp_levels)
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True, num_workers=1,
                               pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False, num_workers=1,
@@ -64,7 +67,7 @@ if __name__ == '__main__':
     print("Preparing model...")
     model = classes.GeneticEmbeddingMLP(num_str_markers=num_str_markers, max_allele_val=config.MAX_ALLELE,
                                         embedding_dim=config.EMBEDDING_DIM, output_dim=output_dim,
-                                        parent_indices=topo_manager.parent_indices).to(config.DEVICE)
+                                        snp_levels=topo_manager.snp_levels).to(config.DEVICE)
     print(f"Maximum tree depth: {model.max_level} SNPs")
     criterion = classes.MaskedBCELoss(pos_weight=pos_weight_tensor, level_tensor=model.level_tensor,
                                       parent_indices=topo_manager.parent_indices).to(config.DEVICE)

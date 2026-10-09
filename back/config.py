@@ -12,7 +12,6 @@ LAYER_DIM = 512
 EMBEDDING_DIM = 16
 MAX_ALLELE = 50
 TRAIN_THRESHOLD = 0.5
-VAL_THRESHOLD = 0.1
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 

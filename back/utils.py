@@ -11,26 +11,33 @@ def parse_str_value(val, col_base):
     if pd.isna(val):
         return []
     s = str(val).strip().lower()
-    if s in ['none', 'nan', 'null', '', 'unknown']:
+    if s in ['none', 'nan', 'null', '', 'unknown', '-']:
         return []
     found = re.findall(r'\d+(?:\.\d+)?', s)
     if not found:
         return []
-    alleles = sorted([int(float(x)) for x in found])
+    alleles = [int(float(x)) for x in found]
     if col_base in config.MULTICOPIES:
         expected = config.MULTICOPIES[col_base]
         actual = len(alleles)
         if actual == expected:
-            return alleles
+            return sorted(alleles)
+        elif actual < expected:
+            if expected == 2 and actual == 1:
+                alleles = [alleles[0], alleles[0]]
+            elif expected == 4 and actual == 2:
+                alleles = [alleles[0], alleles[0], alleles[1], alleles[1]]
+            else:
+                while len(alleles) < expected:
+                    alleles.append(alleles[-1] if alleles else 0)
         elif actual > expected:
-            if expected == 2 and actual > 2:
-                return [alleles[0], alleles[-1]]
-            elif expected == 4 and actual > 4:
-                return [alleles[0], alleles[1], alleles[-2], alleles[-1]]
+            if expected == 2:
+                alleles = [alleles[0], alleles[-1]]
+            elif expected == 4:
+                alleles = [alleles[0], alleles[1], alleles[-2], alleles[-1]]
+        return sorted(alleles)
     else:
-        if len(alleles) > 1:
-            return [alleles[-1]]
-        return alleles
+        return [alleles[-1]]
 
 
 def build_matrices(df):
@@ -46,10 +53,7 @@ def build_matrices(df):
 def accumulate_metrics_from_batch(outputs, targets, masks, stats, criterion=None):
     if criterion is not None:
         with torch.no_grad():
-            probs_raw = torch.sigmoid(outputs)
-            log_probs_raw = torch.log(probs_raw + 1e-7)
-            h_log_probs = log_probs_raw + torch.sparse.mm(criterion.ancestry_matrix, log_probs_raw.t()).t()
-            h_probs = torch.clamp(torch.exp(h_log_probs), min=1e-7, max=1.0 - 1e-7)
+            h_probs = criterion.compute_hierarchical_probs(outputs)
             outputs = torch.log(h_probs / (1.0 - h_probs))
     preds = (torch.sigmoid(outputs) > config.TRAIN_THRESHOLD).float()
     active_preds = preds * masks
@@ -65,11 +69,7 @@ def accumulate_metrics_from_batch(outputs, targets, masks, stats, criterion=None
     f1_path = 2 * (precision * recall) / (precision + recall + 1e-8)
     stats["exact"] += exact_matches
     stats["total_f1"] += f1_path.sum().item()
-    stats["count"] += inputs_size_helper(outputs)
-
-
-def inputs_size_helper(tensor):
-    return tensor.size(0)
+    stats["count"] += outputs.size(0)
 
 
 def evaluate_model(model, loader, criterion, device):
@@ -93,13 +93,8 @@ def evaluate_model(model, loader, criterion, device):
             outputs = model(inputs)
             loss = criterion(outputs, labels, masks)
             total_loss += loss.item() * batch_size
-            probs_raw = torch.sigmoid(outputs)
-            log_probs_raw = torch.log(probs_raw + 1e-7)
-            h_log_probs = log_probs_raw + torch.sparse.mm(criterion.ancestry_matrix, log_probs_raw.t()).t()
-            h_probs = torch.exp(h_log_probs)
-            h_probs = torch.clamp(h_probs, min=1e-7, max=1.0 - 1e-7)
-            simulated_outputs = torch.log(h_probs / (1.0 - h_probs))
-            accumulate_metrics_from_batch(outputs=simulated_outputs, targets=labels, masks=masks, stats=stats)
+            accumulate_metrics_from_batch(outputs=outputs, targets=labels, masks=masks, stats=stats,
+                                          criterion=criterion)
     mean_loss = total_loss / (total_samples + 1e-8)
     total_count = stats["count"] + 1e-8
     global_emr = stats["exact"] / total_count

@@ -3,6 +3,7 @@ import os
 import re
 
 import numpy as np
+import pandas as pd
 import torch
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -10,6 +11,7 @@ from waitress import serve
 
 import classes
 import config
+import utils
 
 app = Flask(__name__)
 CORS(app)
@@ -17,7 +19,7 @@ CORS(app)
 predictor = None
 
 
-def hierarchical_predict(model, x, parent_indices, levels_list, max_level):
+def hierarchical_predict(model, x, parent_indices, levels_list, max_level, threshold):
     model.eval()
     with torch.no_grad():
         logits = model(x)
@@ -29,14 +31,14 @@ def hierarchical_predict(model, x, parent_indices, levels_list, max_level):
             for b in range(batch_size):
                 if len(root_indices) == 1:
                     best_root_idx = root_indices[0]
-                    if probs[b, best_root_idx] >= config.VAL_THRESHOLD:
+                    if probs[b, best_root_idx] >= threshold:
                         final_active_mask[b, best_root_idx] = True
                 else:
                     root_probs = [probs[b, r_idx].item() for r_idx in root_indices]
                     max_idx = np.argmax(root_probs)
                     best_root_idx = root_indices[max_idx]
                     leader_prob = root_probs[max_idx]
-                    if leader_prob >= config.VAL_THRESHOLD:
+                    if leader_prob >= threshold:
                         final_active_mask[b, best_root_idx] = True
         for lvl in range(1, max_level + 1):
             lvl_indices = [idx for idx, l in enumerate(levels_list) if l == lvl]
@@ -59,14 +61,14 @@ def hierarchical_predict(model, x, parent_indices, levels_list, max_level):
                 for p_idx, siblings in parents_groups.items():
                     if len(siblings) == 1:
                         sib_idx = siblings[0]
-                        if probs[b, sib_idx] >= config.VAL_THRESHOLD:
+                        if probs[b, sib_idx] >= threshold:
                             final_active_mask[b, sib_idx] = True
                     else:
                         sib_probs = [probs[b, s_idx].item() for s_idx in siblings]
                         max_idx = np.argmax(sib_probs)
                         best_sib_idx = siblings[max_idx]
                         leader_prob = sib_probs[max_idx]
-                        if leader_prob >= config.VAL_THRESHOLD:
+                        if leader_prob >= threshold:
                             final_active_mask[b, best_sib_idx] = True
         probs = torch.where(final_active_mask, probs, torch.tensor(0.0, device=probs.device))
     return probs
@@ -85,22 +87,18 @@ class GeneticSingleModel:
     def load_model(self):
         with open(os.path.join(config.MODEL_DIR, "snp_list.json"), "r", encoding="utf-8") as f:
             self.sorted_snps = json.load(f)
+        with open(os.path.join(config.MODEL_DIR, "snp_levels.json"), "r", encoding="utf-8") as f:
+            self.levels_list = json.load(f)
         with open(os.path.join(config.MODEL_DIR, "parent_indices.json"), "r", encoding="utf-8") as f:
             self.parent_indices = json.load(f)
         output_dim = len(self.sorted_snps)
         model_path = os.path.join(config.MODEL_DIR, "model_best_emr.pth")
         if os.path.exists(model_path):
-            self.model = classes.GeneticEmbeddingMLP(
-                self.num_str_markers,
-                self.max_allele_val,
-                self.embedding_dim,
-                output_dim,
-                self.parent_indices,
-            )
+            self.model = classes.GeneticEmbeddingMLP(self.num_str_markers, self.max_allele_val, self.embedding_dim,
+                                                     output_dim, self.levels_list)
             self.model.load_state_dict(torch.load(model_path, map_location=config.DEVICE))
             self.model.to(config.DEVICE)
             self.model.eval()
-            self.levels_list = self.model.level_tensor.cpu().numpy().tolist()
 
 
 def build_recursive_tree(full_chain):
@@ -118,56 +116,11 @@ def build_recursive_tree(full_chain):
 
 
 def process_sample_dict(sample_dict):
-    parsed_dict = {}
-    for base_col in config.BASE_STR_COLS:
-        val = sample_dict.get(base_col, None)
-        if val is None or str(val).lower() in ['none', 'nan', 'null', '', 'unknown', '-']:
-            parsed_dict[base_col] = [-1]
-            continue
-        found = re.findall(r'\d+(?:\.\d+)?', str(val).strip())
-        if not found:
-            parsed_dict[base_col] = [-1]
-            continue
-        alleles = sorted([int(float(x)) for x in found])
-        if base_col in config.MULTICOPIES:
-            expected = config.MULTICOPIES[base_col]
-            if len(alleles) > expected:
-                if expected == 2:
-                    alleles = [alleles[0], alleles[-1]]
-                elif expected == 4:
-                    alleles = [alleles[0], alleles[1], alleles[-2], alleles[-1]]
-            elif len(alleles) < expected:
-                while len(alleles) < expected:
-                    alleles.append(alleles[-1] if alleles else 0)
-            parsed_dict[base_col] = alleles
-        else:
-            parsed_dict[base_col] = [alleles[-1]]
-    features = []
-    masks = []
-    for ext_col in config.EXTENDED_STR_COLS:
-        base_name = ext_col
-        suffix_idx = -1
-        for s_idx, sfx in enumerate(['a', 'b', 'c', 'd']):
-            if ext_col.endswith(sfx) and ext_col[:-1] in config.MULTICOPIES:
-                base_name = ext_col[:-1]
-                suffix_idx = s_idx
-                break
-        alleles = parsed_dict.get(base_name, [-1])
-        val = -1.0
-        if suffix_idx != -1:
-            if len(alleles) > suffix_idx:
-                val = float(alleles[suffix_idx])
-        else:
-            if len(alleles) > 0:
-                val = float(alleles[0])
-        if val >= 0.0:
-            features.append(val + 1.0)
-            masks.append(1.0)
-        else:
-            features.append(0.0)
-            masks.append(0.0)
-    max_allowed_idx = config.MAX_ALLELE - 1
-    features = np.clip(features, 0, max_allowed_idx).tolist()
+    raw_sample = {col: [sample_dict.get(col, None)] for col in config.BASE_STR_COLS}
+    raw_sample['Haplogroup'] = [predictor.sorted_snps[0]]
+    df_raw = pd.DataFrame(raw_sample)
+    df_splited = pd.DataFrame(utils.split_multicopies(df_raw))[config.EXTENDED_STR_COLS]
+    features, masks = utils.build_matrices(df_splited)
     return features, masks
 
 
@@ -178,7 +131,7 @@ def predict_snp():
     if not req_json or 'haplotype' not in req_json:
         return jsonify({'status': 'error', 'message': 'Некорректный или пустой JSON запрос'}), 400
     try:
-        threshold_param = req_json.get('confidence', config.VAL_THRESHOLD)
+        threshold_param = req_json['confidence']
         haplotype_input = req_json['haplotype']
         if isinstance(haplotype_input, str):
             vals = [v.strip() for v in re.split(r'[\s,;\t]+', haplotype_input.strip()) if v.strip()]
@@ -193,17 +146,10 @@ def predict_snp():
         else:
             return jsonify({'status': 'error', 'message': 'Формат гаплотипа должен быть строкой или объектом'}), 400
         features, masks = process_sample_dict(sample_dict)
-        features_matrix = np.array([features], dtype=np.float32)
-        masks_matrix = np.array([masks], dtype=np.float32)
-        inputs = np.hstack([features_matrix, masks_matrix])
+        inputs = np.hstack([features.astype(np.float32), masks.astype(np.float32)])
         inputs_tensor = torch.tensor(inputs, dtype=torch.float32).to(config.DEVICE)
-        probs = hierarchical_predict(
-            predictor.model,
-            inputs_tensor,
-            predictor.parent_indices,
-            predictor.levels_list,
-            predictor.model.max_level
-        ).cpu().numpy()[0]
+        probs = hierarchical_predict(predictor.model, inputs_tensor, predictor.parent_indices, predictor.levels_list,
+                                     predictor.model.max_level, threshold_param).cpu().numpy()[0]
         active_indices = [idx for idx, p in enumerate(probs) if p >= threshold_param]
         levels_list = predictor.model.level_tensor.cpu().numpy().tolist()
         active_indices.sort(key=lambda idx: levels_list[idx])

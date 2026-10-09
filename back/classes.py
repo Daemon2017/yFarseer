@@ -16,6 +16,7 @@ class HierarchyTopologyManager:
         self.snp_to_ancestors = {}
         self.all_snps = []
         self.parent_indices = []
+        self.snp_levels = []
 
     def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
@@ -58,11 +59,21 @@ class HierarchyTopologyManager:
                 p_node = nodes.get(str(p_id)) if p_id else None
                 if p_node and p_node['name'] in snp_to_idx:
                     self.parent_indices[idx] = snp_to_idx[p_node['name']]
+        self.snp_levels = [0] * len(self.all_snps)
+        for i in range(len(self.all_snps)):
+            path_len = 0
+            curr = self.parent_indices[i]
+            while curr != -1:
+                path_len += 1
+                curr = self.parent_indices[curr]
+            self.snp_levels[i] = path_len
         os.makedirs(config.MODEL_DIR, exist_ok=True)
         with open(os.path.join(config.MODEL_DIR, 'snp_list.json'), 'w', encoding='utf-8') as f:
             json.dump(self.all_snps, f, ensure_ascii=False)
         with open(os.path.join(config.MODEL_DIR, 'parent_indices.json'), 'w', encoding='utf-8') as f:
             json.dump(self.parent_indices, f, ensure_ascii=False)
+        with open(os.path.join(config.MODEL_DIR, 'snp_levels.json'), 'w', encoding='utf-8') as f:
+            json.dump(self.snp_levels, f, ensure_ascii=False)
 
     def generate_labels_and_masks(self, haplogroups):
         num_samples = len(haplogroups)
@@ -94,7 +105,7 @@ class HierarchyTopologyManager:
 
 class GeneticDataset(Dataset):
     def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None, snp_to_tmrca=None,
-                 parent_indices=None):
+                 parent_indices=None, snp_levels=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
@@ -115,15 +126,7 @@ class GeneticDataset(Dataset):
             rate_ii = config.STR_MUTATION_RATES.get('DYS389ii', 0.00242)
             base_rates[self.idx_389ii] = max(0.0001, rate_ii - rate_i)
         self.mutation_rates_array = np.array(base_rates, dtype=np.float32)
-        self.snp_levels = np.zeros(len(self.all_snps or []), dtype=np.int32)
-        if self.parent_indices:
-            for i in range(len(self.parent_indices)):
-                path_len = 0
-                curr = self.parent_indices[i]
-                while curr != -1:
-                    path_len += 1
-                    curr = self.parent_indices[curr]
-                self.snp_levels[i] = path_len
+        self.snp_levels = np.array(snp_levels or [], dtype=np.int32)
         self.snp_evolution_intervals = {}
         if self.all_snps and self.snp_to_tmrca and self.parent_indices:
             num_snps = len(self.all_snps)
@@ -238,7 +241,7 @@ class GeneticDataset(Dataset):
 
 
 class GeneticEmbeddingMLP(nn.Module):
-    def __init__(self, num_str_markers, max_allele_val, embedding_dim, output_dim, parent_indices=None):
+    def __init__(self, num_str_markers, max_allele_val, embedding_dim, output_dim, snp_levels=None):
         super().__init__()
         self.num_str_markers = num_str_markers
         self.embedding_dim = embedding_dim
@@ -263,16 +266,8 @@ class GeneticEmbeddingMLP(nn.Module):
             nn.Dropout(0.3)
         )
         self.output_layer = nn.Linear((config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim, output_dim)
-        levels = [-1] * len(parent_indices)
-        for i in range(len(parent_indices)):
-            path_len = 0
-            curr = parent_indices[i]
-            while curr != -1:
-                path_len += 1
-                curr = parent_indices[curr]
-            levels[i] = path_len
-        self.register_buffer('level_tensor', torch.tensor(levels, dtype=torch.long), persistent=False)
-        self.max_level = max(levels) if len(levels) > 0 else 0
+        self.register_buffer('level_tensor', torch.tensor(snp_levels or [], dtype=torch.long), persistent=False)
+        self.max_level = max(snp_levels) if snp_levels and len(snp_levels) > 0 else 0
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -314,12 +309,16 @@ class MaskedBCELoss(nn.Module):
         sparse_ancestry = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
         self.register_buffer('ancestry_matrix', sparse_ancestry, persistent=False)
 
-    def forward(self, logits, targets, masks):
+    def compute_hierarchical_probs(self, logits):
         eps = 1e-7
         probs_raw = torch.sigmoid(logits)
         log_probs_raw = torch.log(probs_raw + eps)
         hierarchical_log_probs = log_probs_raw + torch.sparse.mm(self.ancestry_matrix, log_probs_raw.t()).t()
         p_h = torch.clamp(torch.exp(hierarchical_log_probs), min=eps, max=1.0 - eps)
+        return p_h
+
+    def forward(self, logits, targets, masks):
+        p_h = self.compute_hierarchical_probs(logits)
         loss = - (self.pos_weight * targets * torch.log(p_h) + (1.0 - targets) * torch.log(1.0 - p_h))
         loss *= (1.0 + torch.log1p(self.level_tensor.float())).unsqueeze(0)
         loss *= masks
