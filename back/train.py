@@ -48,8 +48,7 @@ if __name__ == '__main__':
     val_labels, val_lmasks = topo_manager.generate_labels_and_masks(val_haplogroups)
     samples_per_snp = train_labels.sum(axis=0)
     median_samples = np.median(samples_per_snp)
-    mean_samples = np.mean(samples_per_snp)
-    print(f"SNP Distribution -> Median: {median_samples:.1f} | Mean: {mean_samples:.1f}")
+    print(f"Median samples/SNP: {median_samples:.1f}")
     print("Preparing datasets...")
     train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True,
                                            all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
