@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -157,7 +158,6 @@ def predict_snp():
         tree_structure = build_recursive_tree(chain_results)
         return jsonify(tree_structure)
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': f"Внутренняя ошибка сервера: {str(e)}"}), 500
 
