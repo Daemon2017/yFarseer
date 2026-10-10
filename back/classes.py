@@ -308,7 +308,9 @@ class MaskedBCELoss(nn.Module):
 
     def forward(self, logits, targets, masks):
         p_h = self.compute_hierarchical_probs(logits)
-        loss = - (self.pos_weight * targets * torch.log(p_h) + (1.0 - targets) * torch.log(1.0 - p_h))
+        fp_weight = 1.0 + (self.level_tensor.float() / 20.0)
+        fp_weight = fp_weight.unsqueeze(0)
+        loss = - (self.pos_weight * targets * torch.log(p_h) + fp_weight * (1.0 - targets) * torch.log(1.0 - p_h))
         loss *= (1.0 + torch.log1p(self.level_tensor.float())).unsqueeze(0)
         loss *= masks
         panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
