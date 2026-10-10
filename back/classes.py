@@ -250,9 +250,7 @@ class GeneticEmbeddingMLP(nn.Module):
                                              embedding_dim=embedding_dim, padding_idx=0)
         offsets = torch.arange(0, num_str_markers) * max_allele_val
         self.register_buffer('offsets', offsets.unsqueeze(0), persistent=False)
-        rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
-        self.register_buffer('mutation_rates', torch.tensor(rates, dtype=torch.float32).unsqueeze(0), persistent=False)
-        total_input_dim = num_str_markers * (embedding_dim + 4)
+        total_input_dim = num_str_markers * embedding_dim
         self.input_layer = nn.Sequential(
             nn.Linear(total_input_dim, config.LAYER_DIM),
             nn.LayerNorm(config.LAYER_DIM),
@@ -275,16 +273,7 @@ class GeneticEmbeddingMLP(nn.Module):
         masks = x[:, self.num_str_markers:]
         features_shifted = (features + self.offsets) * masks.long()
         all_embs = self.total_embeddings(features_shifted)
-        x_val = (features.float() / float(self.max_allele_val)).unsqueeze(-1)
-        rate_modifier = self.mutation_rates.unsqueeze(-1)
-        frequency_scale = 1.0 / (rate_modifier * 100.0 + 1e-5)
-        geom_signal = torch.cat([
-            torch.sin(x_val * 0.5 * frequency_scale),
-            torch.cos(x_val * 0.5 * frequency_scale),
-            torch.sin(x_val * 2.5 * frequency_scale),
-            torch.cos(x_val * 2.5 * frequency_scale)
-        ], dim=-1) * masks.unsqueeze(-1)
-        x_emb = torch.cat([all_embs, geom_signal], dim=-1).view(batch_size, -1)
+        x_emb = all_embs.view(batch_size, -1)
         feat1 = self.input_layer(x_emb)
         feat2 = self.hidden_layer(torch.cat([feat1, x_emb], dim=1))
         return self.output_layer(torch.cat([feat2, feat1, x_emb], dim=1))
