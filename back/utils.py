@@ -135,7 +135,7 @@ def split_multicopies(df):
     return transformed
 
 
-def transform_dataset(df, only_complete=True, age_threshold=-3000, topology=None, snp_to_tmrca=None):
+def transform_dataset(df, only_complete=True, age_threshold=0, topology=None, snp_to_tmrca=None):
     df = df.dropna(subset=['Haplogroup'])
     df = df[~df['Haplogroup'].isin(['-'])]
     synonym_to_snp = get_synonym_to_snp(topology)

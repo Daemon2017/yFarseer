@@ -5,7 +5,7 @@ import os
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 import config
 
@@ -316,3 +316,69 @@ class MaskedBCELoss(nn.Module):
         panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
         loss *= panel_completeness
         return loss.sum() / (masks.sum() + 1e-8)
+
+
+class PairAdversarialBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size, all_snps, snp_to_tmrca):
+        super().__init__(dataset)
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.num_samples = len(dataset)
+        feats = dataset.base_features.astype(np.float32)
+        labels = dataset.labels.astype(np.float32)
+        dot_product = np.dot(feats, feats.T)
+        diag = np.diag(dot_product)
+        str_dist = diag[:, None] + diag[None, :] - 2 * dot_product
+        str_dist = np.sqrt(np.clip(str_dist, 0, None))
+        np.fill_diagonal(str_dist, 1e9)
+        num_snps = len(all_snps)
+        snp_ages = np.zeros(num_snps, dtype=np.float32)
+        for idx, snp_name in enumerate(all_snps):
+            age = snp_to_tmrca.get(snp_name)
+            snp_ages[idx] = float(age) if age is not None else 0.0
+        self.adversarial_pairs = {}
+        block_size = 1000
+        for start_idx in range(0, self.num_samples, block_size):
+            end_idx = min(start_idx + block_size, self.num_samples)
+            block_labels = labels[start_idx:end_idx]
+            common_mask = np.dot(block_labels, labels.T)
+            weighted_block = block_labels * snp_ages[None, :]
+            mrca_ages_block = np.dot(weighted_block, labels.T)
+            mrca_ages_block = np.where(common_mask > 0, mrca_ages_block / np.clip(common_mask, 1, None), 1e9)
+            for i in range(start_idx, end_idx):
+                block_local_idx = i - start_idx
+                mrca_ages = mrca_ages_block[block_local_idx]
+                different_branches = (mrca_ages < 0)
+                if np.any(different_branches):
+                    allowed_indices = np.where(different_branches)[0]
+                    best_enemy = allowed_indices[np.argmin(str_dist[i, allowed_indices])]
+                    self.adversarial_pairs[i] = int(best_enemy)
+                else:
+                    self.adversarial_pairs[i] = int(np.argmin(str_dist[i]))
+
+    def __iter__(self):
+        indices = np.arange(self.num_samples)
+        np.random.shuffle(indices)
+        visited = set()
+        batches = []
+        current_batch = []
+        for idx in indices:
+            if idx in visited:
+                continue
+            current_batch.append(int(idx))
+            visited.add(idx)
+            enemy_idx = self.adversarial_pairs[idx]
+            if enemy_idx not in visited and len(current_batch) < self.batch_size:
+                current_batch.append(int(enemy_idx))
+                visited.add(enemy_idx)
+            if len(current_batch) >= self.batch_size:
+                batches.append(current_batch)
+                current_batch = []
+        if current_batch:
+            batches.append(current_batch)
+        np.random.shuffle(batches)
+        for batch in batches:
+            yield batch
+
+    def __len__(self):
+        return self.num_samples // self.batch_size

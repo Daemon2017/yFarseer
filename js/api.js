@@ -19,7 +19,7 @@ async function fetchPrediction(payload) {
   } catch (error) {
     clearTimeout(timeoutId);
     if (error.name === 'AbortError') {
-      throw new Error('Время ожидания ответа от сервера (15 секунд) истекло.');
+      throw new Error('Время ожидания ответа от сервера истекло.');
     }
     throw error;
   }

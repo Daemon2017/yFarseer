@@ -58,10 +58,12 @@ if __name__ == '__main__':
                                          all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
                                          parent_indices=topo_manager.parent_indices,
                                          snp_levels=topo_manager.snp_levels)
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, drop_last=True, num_workers=1,
-                              pin_memory=True, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, drop_last=False, num_workers=1,
-                            pin_memory=True, persistent_workers=True)
+    train_batch_sampler = classes.PairAdversarialBatchSampler(dataset=train_dataset, batch_size=config.BATCH_SIZE,
+                                                              all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
+    train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, num_workers=1, pin_memory=True,
+                              persistent_workers=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, num_workers=1, pin_memory=True,
+                            persistent_workers=True)
     cached_val_batches = []
     for inputs, labels, masks in val_loader:
         cached_val_batches.append((inputs, labels.float(), masks.float()))
