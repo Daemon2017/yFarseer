@@ -320,7 +320,7 @@ class MaskedBCELoss(nn.Module):
 
 class PairAdversarialBatchSampler(Sampler):
     def __init__(self, dataset, batch_size, all_snps, snp_to_tmrca):
-        super().__init__(dataset)
+        super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
         self.num_samples = len(dataset)
