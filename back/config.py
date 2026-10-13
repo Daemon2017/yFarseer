@@ -1,7 +1,7 @@
 import torch
 
 HAPLOTYPES_FILE = 'real_haplotypes2.csv'
-DATES_FILE = 'dates_tree.json'
+DATES_FILE = 'astronomical_dates_tree.json'
 TOPOLOGY_FILE = 'topology_tree.json'
 MODEL_DIR = 'models'
 
