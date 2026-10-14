@@ -104,19 +104,20 @@ class HierarchyTopologyManager:
 
 
 class GeneticDataset(Dataset):
-    def __init__(self, features, masks, labels, loss_masks, is_training=True, all_snps=None, snp_to_tmrca=None,
-                 parent_indices=None, snp_levels=None):
+    def __init__(self, features, masks, labels, loss_masks, enable_dropout=None, enable_mutations=None, all_snps=None,
+                 snp_to_tmrca=None, parent_indices=None, snp_levels=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
         self.loss_masks = loss_masks
-        self.is_training = is_training
+        self.enable_dropout = enable_dropout
+        self.enable_mutations = enable_mutations
         self.num_features = features.shape[1]
         self.all_snps = all_snps
         self.snp_to_tmrca = snp_to_tmrca
         self.parent_indices = parent_indices
         self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
-        if self.is_training:
+        if self.enable_dropout or self.enable_mutations:
             self.update_epoch_augmentation()
         self.idx_389i = config.EXTENDED_STR_COLS.index('DYS389i') if 'DYS389i' in config.EXTENDED_STR_COLS else None
         self.idx_389ii = config.EXTENDED_STR_COLS.index('DYS389ii') if 'DYS389ii' in config.EXTENDED_STR_COLS else None
@@ -163,7 +164,7 @@ class GeneticDataset(Dataset):
         return len(self.base_features)
 
     def __getitem__(self, idx):
-        if self.is_training:
+        if self.enable_dropout or self.enable_mutations:
             feat = self.base_features[idx].copy().astype(np.float32)
             mask = self.masks[idx].copy().astype(np.float32)
         else:
@@ -174,11 +175,12 @@ class GeneticDataset(Dataset):
                         and mask[self.idx_389i] == 1.0 and mask[self.idx_389ii] == 1.0)
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389ii] - feat[self.idx_389i]
-        if self.is_training:
+        if self.enable_dropout:
             keep_ratio = self.assigned_lengths[idx]
             dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
             mask = mask * dropout_mask
             feat = feat * mask
+        if self.enable_mutations:
             valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
                 current_labels = self.labels[idx]

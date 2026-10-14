@@ -50,13 +50,13 @@ if __name__ == '__main__':
     median_samples = np.median(samples_per_snp)
     print(f"Median samples/SNP: {median_samples:.1f}")
     print("Preparing datasets...")
-    train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, is_training=True,
-                                           all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
-                                           parent_indices=topo_manager.parent_indices,
+    train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, enable_dropout=True,
+                                           enable_mutations=True, all_snps=topo_manager.all_snps,
+                                           snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,
                                            snp_levels=topo_manager.snp_levels)
-    val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, is_training=False,
-                                         all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca,
-                                         parent_indices=topo_manager.parent_indices,
+    val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, enable_dropout=False,
+                                         enable_mutations=False, all_snps=topo_manager.all_snps,
+                                         snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,
                                          snp_levels=topo_manager.snp_levels)
     train_batch_sampler = classes.PairAdversarialBatchSampler(dataset=train_dataset, batch_size=config.BATCH_SIZE,
                                                               all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
@@ -83,7 +83,8 @@ if __name__ == '__main__':
     print("Ready to epochs...")
     for epoch in range(config.EPOCHS):
         train_start_time = time.time()
-        train_dataset.update_epoch_augmentation()
+        if train_dataset.enable_dropout or train_dataset.enable_mutations:
+            train_dataset.update_epoch_augmentation()
         model.train()
         train_loss = 0.0
         total_train_samples = 0
