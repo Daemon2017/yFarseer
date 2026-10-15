@@ -337,7 +337,8 @@ class PairAdversarialBatchSampler(Sampler):
         snp_ages = np.zeros(num_snps, dtype=np.float32)
         for idx, snp_name in enumerate(all_snps):
             age = snp_to_tmrca.get(snp_name)
-            snp_ages[idx] = float(age) if age is not None else 0.0
+            val = float(age) if age is not None else 0.0
+            snp_ages[idx] = 1985.0 - val
         self.adversarial_pairs = {}
         block_size = 1000
         for start_idx in range(0, self.num_samples, block_size):
@@ -350,7 +351,7 @@ class PairAdversarialBatchSampler(Sampler):
             for i in range(start_idx, end_idx):
                 block_local_idx = i - start_idx
                 mrca_ages = mrca_ages_block[block_local_idx]
-                different_branches = (mrca_ages < 0)
+                different_branches = (mrca_ages > 500.0)
                 if np.any(different_branches):
                     allowed_indices = np.where(different_branches)[0]
                     best_enemy = allowed_indices[np.argmin(str_dist[i, allowed_indices])]
