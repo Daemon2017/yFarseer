@@ -321,39 +321,42 @@ class MaskedBCELoss(nn.Module):
 
 
 class PairAdversarialBatchSampler(Sampler):
-    def __init__(self, dataset, batch_size, all_snps, snp_to_tmrca):
+    def __init__(self, dataset, batch_size, df_train, topo_manager):
         super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
         self.num_samples = len(dataset)
         feats = dataset.base_features.astype(np.float32)
-        labels = dataset.labels.astype(np.float32)
         dot_product = np.dot(feats, feats.T)
         diag = np.diag(dot_product)
         str_dist = diag[:, None] + diag[None, :] - 2 * dot_product
         str_dist = np.sqrt(np.clip(str_dist, 0, None))
         np.fill_diagonal(str_dist, 1e9)
-        num_snps = len(all_snps)
-        snp_ages = np.zeros(num_snps, dtype=np.float32)
-        for idx, snp_name in enumerate(all_snps):
-            age = snp_to_tmrca.get(snp_name)
-            val = float(age) if age is not None else 0.0
-            snp_ages[idx] = 1985.0 - val
+        unique_hgs = sorted(list(df_train['Haplogroup'].unique()))
+        hg_to_idx = {hg: idx for idx, hg in enumerate(unique_hgs)}
+        num_hgs = len(unique_hgs)
+        allowed_hg_enemies = np.ones((num_hgs, num_hgs), dtype=np.uint8)
+        for hg1 in unique_hgs:
+            idx1 = hg_to_idx[hg1]
+            canonical1 = topo_manager.synonym_to_snp.get(hg1, hg1)
+            ancestors1 = set(topo_manager.snp_to_ancestors.get(canonical1, [canonical1]))
+            for hg2 in unique_hgs:
+                idx2 = hg_to_idx[hg2]
+                canonical2 = topo_manager.synonym_to_snp.get(hg2, hg2)
+                if canonical2 in ancestors1 or hg1 == hg2:
+                    allowed_hg_enemies[idx1, idx2] = 0
+        sample_hg_indices = np.array([hg_to_idx[hg] for hg in df_train['Haplogroup']], dtype=np.int32)
         self.adversarial_pairs = {}
         block_size = 1000
         for start_idx in range(0, self.num_samples, block_size):
             end_idx = min(start_idx + block_size, self.num_samples)
-            block_labels = labels[start_idx:end_idx]
-            common_mask = np.dot(block_labels, labels.T)
-            weighted_block = block_labels * snp_ages[None, :]
-            mrca_ages_block = np.dot(weighted_block, labels.T)
-            mrca_ages_block = np.where(common_mask > 0, mrca_ages_block / np.clip(common_mask, 1, None), 1e9)
+            block_hg_idxs = sample_hg_indices[start_idx:end_idx]
+            different_branches_mask = allowed_hg_enemies[block_hg_idxs, :][:, sample_hg_indices]
             for i in range(start_idx, end_idx):
                 block_local_idx = i - start_idx
-                mrca_ages = mrca_ages_block[block_local_idx]
-                different_branches = (mrca_ages > 500.0)
-                if np.any(different_branches):
-                    allowed_indices = np.where(different_branches)[0]
+                allowed_for_sample = different_branches_mask[block_local_idx]
+                allowed_indices = np.where(allowed_for_sample == 1)[0]
+                if len(allowed_indices) > 0:
                     best_enemy = allowed_indices[np.argmin(str_dist[i, allowed_indices])]
                     self.adversarial_pairs[i] = int(best_enemy)
                 else:

@@ -60,7 +60,7 @@ if __name__ == '__main__':
                                          snp_levels=topo_manager.snp_levels)
     print("Preparing sampler...")
     train_batch_sampler = classes.PairAdversarialBatchSampler(dataset=train_dataset, batch_size=config.BATCH_SIZE,
-                                                              all_snps=topo_manager.all_snps, snp_to_tmrca=snp_to_tmrca)
+                                                              df_train=df_train, topo_manager=topo_manager)
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, num_workers=1, pin_memory=True,
                               persistent_workers=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, num_workers=1, pin_memory=True,
