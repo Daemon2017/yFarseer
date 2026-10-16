@@ -100,7 +100,7 @@ def evaluate_model(model, loader, criterion, device):
     global_emr = stats["exact"] / total_count
     mean_f1 = stats["total_f1"] / total_count
     report_str = f"Global EMR: {global_emr:.4f} | Path-level F1: {mean_f1:.4f}"
-    return mean_loss, global_emr, report_str
+    return mean_loss, mean_f1, report_str
 
 
 def get_snp_to_tmrca(data):

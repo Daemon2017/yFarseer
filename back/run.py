@@ -93,7 +93,7 @@ class GeneticSingleModel:
         with open(os.path.join(config.MODEL_DIR, "parent_indices.json"), "r", encoding="utf-8") as f:
             self.parent_indices = json.load(f)
         output_dim = len(self.sorted_snps)
-        model_path = os.path.join(config.MODEL_DIR, "model_best_emr.pth")
+        model_path = os.path.join(config.MODEL_DIR, "model_best.pth")
         if os.path.exists(model_path):
             self.model = classes.GeneticEmbeddingMLP(self.num_str_markers, self.max_allele_val, self.embedding_dim,
                                                      output_dim, self.levels_list)

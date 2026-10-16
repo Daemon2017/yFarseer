@@ -80,7 +80,7 @@ if __name__ == '__main__':
                                       parent_indices=topo_manager.parent_indices).to(config.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)
-    best_val_emr = 0.0
+    best_val_f1 = 0.0
     print("Ready to epochs...")
     for epoch in range(config.EPOCHS):
         train_start_time = time.time()
@@ -110,8 +110,8 @@ if __name__ == '__main__':
         train_f1 = train_stats["total_f1"] / train_count
         train_finish_time = time.time() - train_start_time
         val_start_time = time.time()
-        val_loss, val_emr, val_report = utils.evaluate_model(model=model, loader=cached_val_batches,
-                                                             criterion=criterion, device=config.DEVICE)
+        val_loss, val_f1, val_report = utils.evaluate_model(model=model, loader=cached_val_batches, criterion=criterion,
+                                                            device=config.DEVICE)
         scheduler.step()
         val_finish_time = time.time() - val_start_time
         current_lr = scheduler.get_last_lr()[0]
@@ -120,8 +120,11 @@ if __name__ == '__main__':
               f"Train Loss: {train_loss:.4f} | Valid Loss: {val_loss:.4f}\n"
               f"  TRAIN -> Global EMR: {train_emr:.4f} | Path-level F1: {train_f1:.4f}\n"
               f"  VALID -> {val_report}")
-        if val_emr > best_val_emr:
-            best_val_emr = val_emr
-            best_model_path = os.path.join(config.MODEL_DIR, "model_best_emr.pth")
-            torch.save(model.state_dict(), best_model_path)
-            print(f"  --> Сохранена новая лучшая модель с VALID GLOBAL EMR: {best_val_emr:.4f}")
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
+            if (epoch + 1) >= (config.EPOCHS // 2):
+                best_model_path = os.path.join(config.MODEL_DIR, "model_best.pth")
+                torch.save(model.state_dict(), best_model_path)
+                print(f"  --> Сохранена новая лучшая модель с VALID GLOBAL F1: {best_val_f1:.4f}")
+            else:
+                print(f"  --> Новая лучшая модель с VALID GLOBAL F1: {best_val_f1:.4f}")
