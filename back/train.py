@@ -49,11 +49,14 @@ if __name__ == '__main__':
     samples_per_snp = train_labels.sum(axis=0)
     median_samples = np.median(samples_per_snp)
     print(f"Median samples/SNP: {median_samples:.1f}")
+    print("Calculating macro-haplogroup modal haplotypes...")
+    macro_modals_dict = utils.get_macro_modals(df_train)
     print("Preparing datasets...")
     train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, enable_dropout=True,
                                            enable_mutations=True, all_snps=topo_manager.all_snps,
                                            snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,
-                                           snp_levels=topo_manager.snp_levels)
+                                           snp_levels=topo_manager.snp_levels, df_train=df_train,
+                                           macro_modals_dict=macro_modals_dict)
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, enable_dropout=False,
                                          enable_mutations=False, all_snps=topo_manager.all_snps,
                                          snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,

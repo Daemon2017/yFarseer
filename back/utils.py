@@ -51,10 +51,9 @@ def build_matrices(df):
 
 
 def accumulate_metrics_from_batch(outputs, targets, masks, stats, criterion=None):
-    if criterion is not None:
-        with torch.no_grad():
-            h_probs = criterion.compute_hierarchical_probs(outputs)
-            outputs = torch.log(h_probs / (1.0 - h_probs))
+    with torch.no_grad():
+        h_probs = criterion.compute_hierarchical_probs(outputs)
+        outputs = torch.log(h_probs / (1.0 - h_probs))
     preds = (torch.sigmoid(outputs) > config.TRAIN_THRESHOLD).float()
     active_preds = preds * masks
     active_targets = targets * masks
@@ -128,8 +127,8 @@ def split_multicopies(df):
         if base_col in config.MULTICOPIES:
             suffixes = ['a', 'b', 'c', 'd'][:config.MULTICOPIES[base_col]]
             for i, suf in enumerate(suffixes):
-                transformed[f"{base_col}{suf}"] = parsed.apply(
-                    lambda x: float(x[i]) if x is not None and len(x) > i else np.nan)
+                transformed[f"{base_col}{suf}"] = \
+                    parsed.apply(lambda x: float(x[i]) if x is not None and len(x) > i else np.nan)
         else:
             transformed[base_col] = parsed.apply(lambda x: float(x[-1]) if x is not None and len(x) > 0 else np.nan)
     return transformed
@@ -151,3 +150,31 @@ def transform_dataset(df, only_complete=True, age_threshold=0, topology=None, sn
     if only_complete:
         df_clean = df_clean.dropna(subset=config.EXTENDED_STR_COLS)
     return df_clean
+
+
+def get_macro_modals(df):
+    df_copy = df.copy()
+    df_copy['Macro_HG'] = df_copy['Haplogroup'].astype(str).str.strip().str[0].str.upper()
+    macro_modals_dict = {}
+    for macro_hg, group in df_copy.groupby('Macro_HG'):
+        modal_profile = []
+        for col in config.EXTENDED_STR_COLS:
+            vals = pd.to_numeric(group[col], errors='coerce').dropna()
+            vals = vals[vals > 0]
+            if not vals.empty:
+                mode_val = vals.mode().iloc[0]
+                mode_transformed = int(np.floor(mode_val)) + 1
+                modal_profile.append(mode_transformed)
+            else:
+                modal_profile.append(0)
+        macro_modals_dict[macro_hg] = np.array(modal_profile, dtype=np.int64)
+    global_modal = []
+    for col in config.EXTENDED_STR_COLS:
+        vals = pd.to_numeric(df_copy[col], errors='coerce').dropna()
+        vals = vals[vals > 0]
+        if not vals.empty:
+            global_modal.append(int(np.floor(vals.mode().iloc[0])) + 1)
+        else:
+            global_modal.append(0)
+    macro_modals_dict['GLOBAL'] = np.array(global_modal, dtype=np.int64)
+    return macro_modals_dict
