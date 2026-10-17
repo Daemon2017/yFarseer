@@ -321,46 +321,23 @@ class MaskedBCELoss(nn.Module):
 
 
 class PairAdversarialBatchSampler(Sampler):
-    def __init__(self, dataset, batch_size, df_train, topo_manager):
+    def __init__(self, dataset, batch_size):
         super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
         self.num_samples = len(dataset)
+        self.top_n_convergence = 8
         feats = dataset.base_features.astype(np.float32)
         dot_product = np.dot(feats, feats.T)
         diag = np.diag(dot_product)
         str_dist = diag[:, None] + diag[None, :] - 2 * dot_product
         str_dist = np.sqrt(np.clip(str_dist, 0, None))
         np.fill_diagonal(str_dist, 1e9)
-        unique_hgs = sorted(list(df_train['Haplogroup'].unique()))
-        hg_to_idx = {hg: idx for idx, hg in enumerate(unique_hgs)}
-        num_hgs = len(unique_hgs)
-        allowed_hg_enemies = np.ones((num_hgs, num_hgs), dtype=np.uint8)
-        for hg1 in unique_hgs:
-            idx1 = hg_to_idx[hg1]
-            canonical1 = topo_manager.synonym_to_snp.get(hg1, hg1)
-            ancestors1 = set(topo_manager.snp_to_ancestors.get(canonical1, [canonical1]))
-            for hg2 in unique_hgs:
-                idx2 = hg_to_idx[hg2]
-                canonical2 = topo_manager.synonym_to_snp.get(hg2, hg2)
-                if canonical2 in ancestors1 or hg1 == hg2:
-                    allowed_hg_enemies[idx1, idx2] = 0
-        sample_hg_indices = np.array([hg_to_idx[hg] for hg in df_train['Haplogroup']], dtype=np.int32)
-        self.adversarial_pairs = {}
-        block_size = 1000
-        for start_idx in range(0, self.num_samples, block_size):
-            end_idx = min(start_idx + block_size, self.num_samples)
-            block_hg_idxs = sample_hg_indices[start_idx:end_idx]
-            different_branches_mask = allowed_hg_enemies[block_hg_idxs, :][:, sample_hg_indices]
-            for i in range(start_idx, end_idx):
-                block_local_idx = i - start_idx
-                allowed_for_sample = different_branches_mask[block_local_idx]
-                allowed_indices = np.where(allowed_for_sample == 1)[0]
-                if len(allowed_indices) > 0:
-                    best_enemy = allowed_indices[np.argmin(str_dist[i, allowed_indices])]
-                    self.adversarial_pairs[i] = int(best_enemy)
-                else:
-                    self.adversarial_pairs[i] = int(np.argmin(str_dist[i]))
+        self.adversarial_pools = {}
+        for i in range(self.num_samples):
+            sorted_positions = np.argsort(str_dist[i])
+            top_positions = sorted_positions[:self.top_n_convergence]
+            self.adversarial_pools[i] = top_positions.tolist()
 
     def __iter__(self):
         indices = np.arange(self.num_samples)
@@ -373,7 +350,8 @@ class PairAdversarialBatchSampler(Sampler):
                 continue
             current_batch.append(int(idx))
             visited.add(idx)
-            enemy_idx = self.adversarial_pairs[idx]
+            enemy_pool = self.adversarial_pools[idx]
+            enemy_idx = np.random.choice(enemy_pool)
             if enemy_idx not in visited and len(current_batch) < self.batch_size:
                 current_batch.append(int(enemy_idx))
                 visited.add(enemy_idx)
@@ -381,7 +359,11 @@ class PairAdversarialBatchSampler(Sampler):
                 batches.append(current_batch)
                 current_batch = []
         if current_batch:
-            batches.append(current_batch)
+            if len(batches) > 0 and len(current_batch) < (self.batch_size // 2):
+                for b_idx, item in enumerate(current_batch):
+                    batches[b_idx % len(batches)].append(item)
+            else:
+                batches.append(current_batch)
         np.random.shuffle(batches)
         for batch in batches:
             yield batch
