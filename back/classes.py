@@ -321,7 +321,7 @@ class MaskedBCELoss(nn.Module):
 
 
 class PairAdversarialBatchSampler(Sampler):
-    def __init__(self, dataset, batch_size):
+    def __init__(self, dataset, batch_size, df_train):
         super().__init__()
         self.dataset = dataset
         self.batch_size = batch_size
@@ -333,6 +333,9 @@ class PairAdversarialBatchSampler(Sampler):
         str_dist = diag[:, None] + diag[None, :] - 2 * dot_product
         str_dist = np.sqrt(np.clip(str_dist, 0, None))
         np.fill_diagonal(str_dist, 1e9)
+        haplogroups = df_train['Haplogroup'].values
+        same_hg_mask = (haplogroups[:, None] == haplogroups[None, :])
+        str_dist[same_hg_mask] = 1e9
         self.adversarial_pools = {}
         for i in range(self.num_samples):
             sorted_positions = np.argsort(str_dist[i])

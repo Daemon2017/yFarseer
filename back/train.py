@@ -59,7 +59,8 @@ if __name__ == '__main__':
                                          snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,
                                          snp_levels=topo_manager.snp_levels)
     print("Preparing sampler...")
-    train_batch_sampler = classes.PairAdversarialBatchSampler(dataset=train_dataset, batch_size=config.BATCH_SIZE)
+    train_batch_sampler = classes.PairAdversarialBatchSampler(dataset=train_dataset, batch_size=config.BATCH_SIZE,
+                                                              df_train=df_train)
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, num_workers=1, pin_memory=True,
                               persistent_workers=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, num_workers=1, pin_memory=True,
