@@ -165,11 +165,6 @@ class GeneticDataset(Dataset):
                         and mask[self.idx_389i] == 1.0 and mask[self.idx_389ii] == 1.0)
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389ii] - feat[self.idx_389i]
-        if self.enable_dropout:
-            keep_ratio = self.assigned_lengths[idx]
-            dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
-            mask = mask * dropout_mask
-            feat = feat * mask
         if need_mutations:
             valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
@@ -192,8 +187,7 @@ class GeneticDataset(Dataset):
                     rate_factor = marker_rate / 0.002
                     diffusion_factor = max(0.5, math.sqrt(time_scale * rate_factor))
                     base_p_continue = 0.12
-                    p_continue = base_p_continue * (1.0 - math.exp(-0.5 * diffusion_factor)) / \
-                                 (1.0 - math.exp(-0.5))
+                    p_continue = base_p_continue * (1.0 - math.exp(-0.5 * diffusion_factor)) / (1.0 - math.exp(-0.5))
                     p_continue = max(0.05, min(0.45, p_continue))
                     step = 1.0
                     while np.random.rand() < p_continue:
@@ -201,6 +195,11 @@ class GeneticDataset(Dataset):
                         if step >= 10.0:
                             break
                     feat[col] += step * np.random.choice([1.0, -1.0])
+        if self.enable_dropout:
+            keep_ratio = self.assigned_lengths[idx]
+            dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
+            mask = mask * dropout_mask
+            feat = feat * mask
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389i] + feat[self.idx_389ii]
         for base_col, expected_len in config.MULTICOPIES.items():
