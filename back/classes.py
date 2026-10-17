@@ -206,7 +206,7 @@ class GeneticDataset(Dataset):
                                 break
                         proposed_feat[col] += step * np.random.choice([1.0, -1.0])
                     new_total_dist_sq = np.sum((proposed_feat[valid_mask] - macro_modal[valid_mask]) ** 2)
-                    if new_total_dist_sq <= current_total_dist_sq:
+                    if new_total_dist_sq <= current_total_dist_sq * 1.1:
                         feat = proposed_feat
                         break
         if self.enable_dropout:
