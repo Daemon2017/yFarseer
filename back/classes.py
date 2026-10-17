@@ -114,7 +114,6 @@ class GeneticDataset(Dataset):
         self.enable_mutations = enable_mutations
         self.num_features = features.shape[1]
         self.all_snps = all_snps
-        self.snp_to_tmrca = snp_to_tmrca
         self.parent_indices = parent_indices
         self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
         if self.enable_dropout or self.enable_mutations:
@@ -127,44 +126,35 @@ class GeneticDataset(Dataset):
             rate_ii = config.STR_MUTATION_RATES.get('DYS389ii', 0.00242)
             base_rates[self.idx_389ii] = max(0.0001, rate_ii - rate_i)
         self.mutation_rates_array = np.array(base_rates, dtype=np.float32)
-        self.snp_levels = np.array(snp_levels or [], dtype=np.int32)
-        self.snp_evolution_intervals = {}
-        if self.all_snps and self.snp_to_tmrca and self.parent_indices:
-            num_snps = len(self.all_snps)
-            parent_to_children = {i: [] for i in range(num_snps)}
-            for child_idx, parent_idx in enumerate(self.parent_indices):
-                if parent_idx != -1 and parent_idx < num_snps:
-                    parent_to_children[parent_idx].append(child_idx)
-            for idx, snp_name in enumerate(self.all_snps):
-                age = self.snp_to_tmrca.get(snp_name)
-                if age is None:
-                    self.snp_evolution_intervals[snp_name] = 500.0
-                    continue
-                age = float(age)
-                children_indices = parent_to_children.get(idx, [])
-                children_ages = []
-                for c_idx in children_indices:
-                    c_name = self.all_snps[c_idx]
-                    c_age = self.snp_to_tmrca.get(c_name)
-                    if c_age is not None:
-                        children_ages.append(float(c_age))
-                if children_ages:
-                    mean_children_age = sum(children_ages) / len(children_ages)
-                    interval = mean_children_age - age
-                else:
-                    interval = 1985.0 - age
-                self.snp_evolution_intervals[snp_name] = max(0.0, interval)
+        self.sample_is_terminal = np.zeros(len(features), dtype=bool)
+        self.sample_tmrca_years = np.zeros(len(features), dtype=np.float32)
+        if self.enable_mutations and all_snps and parent_indices and snp_levels:
+            is_terminal_snp = np.ones(len(all_snps), dtype=bool)
+            for p_idx in parent_indices:
+                if p_idx != -1 and p_idx < len(is_terminal_snp):
+                    is_terminal_snp[p_idx] = False
+            snp_levels_np = np.array(snp_levels, dtype=np.int32)
+            for i in range(len(features)):
+                active_snp_indices = np.where(labels[i] == 1.0)[0]
+                if len(active_snp_indices) > 0:
+                    deepest_local_idx = active_snp_indices[np.argmax(snp_levels_np[active_snp_indices])]
+                    if is_terminal_snp[deepest_local_idx]:
+                        self.sample_is_terminal[i] = True
+                        snp_name = all_snps[deepest_local_idx]
+                        age = snp_to_tmrca.get(snp_name, 500.0)
+                        self.sample_tmrca_years[i] = max(100.0, 1985.0 - float(age if age is not None else 500.0))
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
-        uniform_samples = np.random.rand(num_samples)
-        self.assigned_lengths = 0.1 + (uniform_samples * 0.9)
+        self.assigned_lengths = 0.1 + (np.random.rand(num_samples) * 0.9)
 
     def __len__(self):
         return len(self.base_features)
 
     def __getitem__(self, idx):
-        if self.enable_dropout or self.enable_mutations:
+        need_mutations = self.enable_mutations and self.sample_is_terminal[idx]
+        need_modify = self.enable_dropout or need_mutations
+        if need_modify:
             feat = self.base_features[idx].copy().astype(np.float32)
             mask = self.masks[idx].copy().astype(np.float32)
         else:
@@ -180,20 +170,10 @@ class GeneticDataset(Dataset):
             dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
             mask = mask * dropout_mask
             feat = feat * mask
-        if self.enable_mutations:
+        if need_mutations:
             valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
-                current_labels = self.labels[idx]
-                active_snp_indices = np.where(current_labels == 1.0)[0]
-                tmrca_years = 500.0
-                if len(active_snp_indices) > 0 and self.all_snps:
-                    active_levels = self.snp_levels[active_snp_indices]
-                    deepest_local_idx = active_snp_indices[np.argmax(active_levels)]
-                    last_snp_name = self.all_snps[deepest_local_idx]
-                    interval = self.snp_evolution_intervals.get(last_snp_name)
-                    if interval is not None:
-                        tmrca_years = interval
-                tmrca_years = max(100.0, tmrca_years)
+                tmrca_years = self.sample_tmrca_years[idx]
                 time_scale = tmrca_years / 500.0
                 active_markers_count = np.sum(mask == 1.0)
                 generations = tmrca_years / 30.0
@@ -202,8 +182,7 @@ class GeneticDataset(Dataset):
                 adapted_probs = [(target_expected ** v) * math.exp(-target_expected) / math.factorial(v) for v in vals]
                 prob_sum = sum(adapted_probs)
                 adapted_probs = [p / prob_sum for p in adapted_probs] if prob_sum > 0 else [1.0, 0, 0, 0, 0, 0]
-                num_mutations = int(np.random.choice(vals, p=adapted_probs))
-                num_mutations = min(num_mutations, len(valid_indices))
+                num_mutations = min(int(np.random.choice(vals, p=adapted_probs)), len(valid_indices))
                 lvl_rates = self.mutation_rates_array[valid_indices]
                 rates_sum = np.sum(lvl_rates)
                 p_normalized = lvl_rates / rates_sum if rates_sum > 0 else None
@@ -211,18 +190,17 @@ class GeneticDataset(Dataset):
                 for col in chosen_cols:
                     marker_rate = self.mutation_rates_array[col]
                     rate_factor = marker_rate / 0.002
-                    diffusion_factor = math.sqrt(time_scale * rate_factor)
-                    diffusion_factor = max(0.5, diffusion_factor)
+                    diffusion_factor = max(0.5, math.sqrt(time_scale * rate_factor))
                     base_p_continue = 0.12
-                    p_continue = base_p_continue * (1.0 - math.exp(-0.5 * diffusion_factor)) / (1.0 - math.exp(-0.5))
+                    p_continue = base_p_continue * (1.0 - math.exp(-0.5 * diffusion_factor)) / \
+                                 (1.0 - math.exp(-0.5))
                     p_continue = max(0.05, min(0.45, p_continue))
                     step = 1.0
                     while np.random.rand() < p_continue:
                         step += 1.0
                         if step >= 10.0:
                             break
-                    direction = np.random.choice([1.0, -1.0])
-                    feat[col] += step * direction
+                    feat[col] += step * np.random.choice([1.0, -1.0])
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389i] + feat[self.idx_389ii]
         for base_col, expected_len in config.MULTICOPIES.items():
