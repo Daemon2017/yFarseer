@@ -1,5 +1,4 @@
 import json
-import math
 import os
 
 import numpy as np
@@ -105,7 +104,7 @@ class HierarchyTopologyManager:
 
 class GeneticDataset(Dataset):
     def __init__(self, features, masks, labels, loss_masks, enable_dropout=None, enable_mutations=None, all_snps=None,
-                 snp_to_tmrca=None, parent_indices=None, snp_levels=None, df_train=None, macro_modals_dict=None):
+                 snp_to_tmrca=None, parent_indices=None, snp_levels=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
@@ -121,13 +120,9 @@ class GeneticDataset(Dataset):
         self.idx_389i = config.EXTENDED_STR_COLS.index('DYS389i') if 'DYS389i' in config.EXTENDED_STR_COLS else None
         self.idx_389ii = config.EXTENDED_STR_COLS.index('DYS389ii') if 'DYS389ii' in config.EXTENDED_STR_COLS else None
         base_rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
-        rate_i = config.STR_MUTATION_RATES.get('DYS389i', 0.00186)
-        rate_ii = config.STR_MUTATION_RATES.get('DYS389ii', 0.00242)
-        base_rates[self.idx_389ii] = max(0.0001, rate_ii - rate_i)
         self.mutation_rates_array = np.array(base_rates, dtype=np.float32)
         self.sample_is_terminal = np.zeros(len(features), dtype=bool)
         self.sample_tmrca_years = np.zeros(len(features), dtype=np.float32)
-        self.sample_macro_modals = np.zeros_like(features, dtype=np.float32)
         if self.enable_mutations and all_snps and parent_indices and snp_levels:
             is_terminal_snp = np.ones(len(all_snps), dtype=bool)
             for p_idx in parent_indices:
@@ -135,10 +130,6 @@ class GeneticDataset(Dataset):
                     is_terminal_snp[p_idx] = False
             snp_levels_np = np.array(snp_levels, dtype=np.int32)
             for i in range(len(features)):
-                hg_str = str(df_train['Haplogroup'].values[i]).strip().upper()
-                macro_letter = hg_str[0] if len(hg_str) > 0 else 'GLOBAL'
-                target_modal = macro_modals_dict.get(macro_letter, macro_modals_dict['GLOBAL'])
-                self.sample_macro_modals[i] = target_modal.astype(np.float32)
                 active_snp_indices = np.where(labels[i] == 1.0)[0]
                 if len(active_snp_indices) > 0:
                     deepest_local_idx = active_snp_indices[np.argmax(snp_levels_np[active_snp_indices])]
@@ -146,7 +137,7 @@ class GeneticDataset(Dataset):
                         self.sample_is_terminal[i] = True
                         snp_name = all_snps[deepest_local_idx]
                         age = snp_to_tmrca.get(snp_name, 500.0)
-                        self.sample_tmrca_years[i] = max(100.0, 1985.0 - float(age if age is not None else 500.0))
+                        self.sample_tmrca_years[i] = max(25.0, 1985.0 - float(age if age is not None else 500.0))
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
@@ -165,52 +156,30 @@ class GeneticDataset(Dataset):
             feat = self.base_features[idx].astype(np.float32)
             mask = self.masks[idx].astype(np.float32)
         cols = config.EXTENDED_STR_COLS
-        use_389_sync = (mask[self.idx_389i] == 1.0 and mask[self.idx_389ii] == 1.0)
-        if use_389_sync:
-            feat[self.idx_389ii] = feat[self.idx_389ii] - feat[self.idx_389i]
         if need_mutations:
             valid_indices = np.where((mask == 1.0) & (feat > 1.0) & (~np.isnan(feat)))[0]
             if len(valid_indices) > 0:
-                macro_modal = self.sample_macro_modals[idx]
-                valid_mask = (mask == 1.0)
-                current_total_dist_sq = np.sum((feat[valid_mask] - macro_modal[valid_mask]) ** 2)
-                for attempt in range(100):
-                    tmrca_years = self.sample_tmrca_years[idx]
-                    time_scale = tmrca_years / 500.0
-                    active_markers_count = np.sum(mask == 1.0)
-                    generations = tmrca_years / 30.0
-                    target_expected = active_markers_count * 0.002 * generations
-                    vals = [0, 1, 2, 3, 4, 5]
-                    adapted_probs = \
-                        [(target_expected ** v) * math.exp(-target_expected) / math.factorial(v) for v in vals]
-                    prob_sum = sum(adapted_probs)
-                    adapted_probs = [p / prob_sum for p in adapted_probs] if prob_sum > 0 else [1.0, 0, 0, 0, 0, 0]
-                    num_mutations = min(int(np.random.choice(vals, p=adapted_probs)), len(valid_indices))
-                    lvl_rates = self.mutation_rates_array[valid_indices]
-                    rates_sum = np.sum(lvl_rates)
-                    p_normalized = lvl_rates / rates_sum if rates_sum > 0 else None
-                    proposed_feat = feat.copy()
-                    chosen_cols = np.random.choice(valid_indices, size=num_mutations, replace=False, p=p_normalized)
-                    for col in chosen_cols:
-                        marker_rate = self.mutation_rates_array[col]
-                        rate_factor = marker_rate / 0.002
-                        diffusion_factor = max(0.5, math.sqrt(time_scale * rate_factor))
-                        base_p_continue = 0.12
-                        p_continue = \
-                            base_p_continue * (1.0 - math.exp(-0.5 * diffusion_factor)) / (1.0 - math.exp(-0.5))
-                        p_continue = max(0.05, min(0.45, p_continue))
-                        step = 1.0
-                        while np.random.rand() < p_continue:
-                            step += 1.0
-                            if step >= 10.0:
-                                break
-                        proposed_feat[col] += step * np.random.choice([1.0, -1.0])
-                    new_total_dist_sq = np.sum((proposed_feat[valid_mask] - macro_modal[valid_mask]) ** 2)
-                    if current_total_dist_sq * 0.75 <= new_total_dist_sq <= current_total_dist_sq * 1.25:
-                        feat = proposed_feat
-                        break
-        if use_389_sync:
-            feat[self.idx_389ii] = feat[self.idx_389i] + feat[self.idx_389ii]
+                tmrca_years = self.sample_tmrca_years[idx]
+                generations = tmrca_years / 30.0
+                lambdas = self.mutation_rates_array[valid_indices] * generations
+                mutations = np.random.poisson(lambdas)
+                active_mask = mutations > 0
+                if np.any(active_mask):
+                    mut_indices = valid_indices[active_mask]
+                    mut_counts = mutations[active_mask]
+                    all_mut_steps_indices = np.repeat(mut_indices, mut_counts)
+                    if len(all_mut_steps_indices) % 2 != 0:
+                        extra_fake_idx = np.random.choice(valid_indices)
+                        all_mut_steps_indices = np.append(all_mut_steps_indices, extra_fake_idx)
+                    np.random.shuffle(all_mut_steps_indices)
+                    half = len(all_mut_steps_indices) // 2
+                    plus_indices = all_mut_steps_indices[:half]
+                    minus_indices = all_mut_steps_indices[half: half * 2]
+                    np.add.at(feat, plus_indices, 1.0)
+                    np.add.at(feat, minus_indices, -1.0)
+                    dys389i_delta = np.sum(plus_indices == self.idx_389i) - np.sum(minus_indices == self.idx_389i)
+                    if dys389i_delta != 0.0 and self.idx_389ii is not None and mask[self.idx_389ii] == 1.0:
+                        feat[self.idx_389ii] += dys389i_delta
         for base_col, expected_len in config.MULTICOPIES.items():
             suffixes = ['a', 'b', 'c', 'd'][:expected_len]
             sub_cols = [f"{base_col}{suf}" for suf in suffixes]
