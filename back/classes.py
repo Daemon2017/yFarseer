@@ -174,7 +174,7 @@ class GeneticDataset(Dataset):
                 macro_modal = self.sample_macro_modals[idx]
                 valid_mask = (mask == 1.0)
                 current_total_dist_sq = np.sum((feat[valid_mask] - macro_modal[valid_mask]) ** 2)
-                for attempt in range(25):
+                for attempt in range(100):
                     tmrca_years = self.sample_tmrca_years[idx]
                     time_scale = tmrca_years / 500.0
                     active_markers_count = np.sum(mask == 1.0)
@@ -206,7 +206,7 @@ class GeneticDataset(Dataset):
                                 break
                         proposed_feat[col] += step * np.random.choice([1.0, -1.0])
                     new_total_dist_sq = np.sum((proposed_feat[valid_mask] - macro_modal[valid_mask]) ** 2)
-                    if new_total_dist_sq <= current_total_dist_sq * 1.1:
+                    if current_total_dist_sq * 0.75 <= new_total_dist_sq <= current_total_dist_sq * 1.25:
                         feat = proposed_feat
                         break
         if use_389_sync:
