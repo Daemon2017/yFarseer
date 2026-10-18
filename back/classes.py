@@ -209,11 +209,6 @@ class GeneticDataset(Dataset):
                     if new_total_dist_sq <= current_total_dist_sq * 1.1:
                         feat = proposed_feat
                         break
-        if self.enable_dropout:
-            keep_ratio = self.assigned_lengths[idx]
-            dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
-            mask = mask * dropout_mask
-            feat = feat * mask
         if use_389_sync:
             feat[self.idx_389ii] = feat[self.idx_389i] + feat[self.idx_389ii]
         for base_col, expected_len in config.MULTICOPIES.items():
@@ -226,6 +221,11 @@ class GeneticDataset(Dataset):
                     feat[start_idx:actual_end] = np.sort(feat[start_idx:actual_end])
             except ValueError:
                 continue
+        if self.enable_dropout:
+            keep_ratio = self.assigned_lengths[idx]
+            dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
+            mask = mask * dropout_mask
+            feat = feat * mask
         feat = np.clip(feat, a_min=0.0, a_max=float(config.MAX_ALLELE - 1))
         inputs = np.hstack([feat, mask])
         return (torch.tensor(inputs, dtype=torch.float32),
