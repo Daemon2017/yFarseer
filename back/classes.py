@@ -168,9 +168,25 @@ class GeneticDataset(Dataset):
                     mut_indices = valid_indices[active_mask]
                     mut_counts = mutations[active_mask]
                     all_mut_steps_indices = np.repeat(mut_indices, mut_counts)
-                    if len(all_mut_steps_indices) % 2 != 0:
-                        extra_fake_idx = np.random.choice(valid_indices)
-                        all_mut_steps_indices = np.append(all_mut_steps_indices, extra_fake_idx)
+                    base_pairs = len(all_mut_steps_indices) // 2
+                    if base_pairs >= 2:
+                        pair_delta = int(np.round(np.random.normal(loc=0.0, scale=1.0)))
+                        final_pairs = max(1, base_pairs + pair_delta)
+                        target_len = final_pairs * 2
+                        current_len = len(all_mut_steps_indices)
+                        if current_len < target_len:
+                            extra_indices = np.random.choice(valid_indices, size=(target_len - current_len),
+                                                             replace=True)
+                            all_mut_steps_indices = np.append(all_mut_steps_indices, extra_indices)
+                        elif current_len > target_len:
+                            p_rates = self.mutation_rates_array[valid_indices]
+                            p_norm = p_rates / np.sum(p_rates)
+                            all_mut_steps_indices = np.random.choice(valid_indices, size=target_len, replace=True,
+                                                                     p=p_norm)
+                    else:
+                        if len(all_mut_steps_indices) % 2 != 0:
+                            extra_fake_idx = np.random.choice(valid_indices)
+                            all_mut_steps_indices = np.append(all_mut_steps_indices, extra_fake_idx)
                     np.random.shuffle(all_mut_steps_indices)
                     half = len(all_mut_steps_indices) // 2
                     plus_indices = all_mut_steps_indices[:half]
