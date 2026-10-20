@@ -150,3 +150,23 @@ def transform_dataset(df, only_complete=True, age_threshold=0, topology=None, sn
     if only_complete:
         df_clean = df_clean.dropna(subset=config.EXTENDED_STR_COLS)
     return df_clean
+
+
+def resolve_para_groups(haplogroup, synonym_to_snp, active_haplogroups_set, parent_to_children_raw):
+    canonical = synonym_to_snp.get(haplogroup, haplogroup)
+    if not config.IS_PARA_GROUPS_ENABLED:
+        return canonical
+    all_tree_children = parent_to_children_raw.get(canonical, [])
+    has_active_descendants = False
+    if all_tree_children:
+        stack = list(all_tree_children)
+        while stack:
+            curr = stack.pop()
+            if curr in active_haplogroups_set:
+                has_active_descendants = True
+                break
+            if curr in parent_to_children_raw:
+                stack.extend(parent_to_children_raw[curr])
+    if has_active_descendants:
+        return f"{canonical}*"
+    return canonical

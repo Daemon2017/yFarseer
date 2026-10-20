@@ -13,6 +13,8 @@ EMBEDDING_DIM = 16
 MAX_ALLELE = 50
 TRAIN_THRESHOLD = 0.5
 
+IS_PARA_GROUPS_ENABLED = True
+
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 MULTICOPIES = {'DYS385': 2, 'DYS459': 2, 'YCAII': 2, 'CDY': 2, 'DYF395S1': 2, 'DYS413': 2, 'DYS464': 4}

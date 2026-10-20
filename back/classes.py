@@ -7,6 +7,7 @@ from torch import nn
 from torch.utils.data import Dataset, Sampler
 
 import config
+import utils
 
 
 class HierarchyTopologyManager:
@@ -16,48 +17,64 @@ class HierarchyTopologyManager:
         self.all_snps = []
         self.parent_indices = []
         self.snp_levels = []
+        self.parent_to_children_raw = {}
+
+    def get_ancestors(self, node_name, name_to_node, nodes):
+        if node_name.endswith('*'):
+            base_node = node_name[:-1]
+            return self.get_ancestors(base_node, name_to_node, nodes) + [node_name]
+        if node_name in self.snp_to_ancestors:
+            return self.snp_to_ancestors[node_name]
+        node = name_to_node.get(node_name)
+        if not node:
+            return [node_name]
+        p_id = node.get('parentId')
+        p_node = nodes.get(str(p_id)) if p_id else None
+        if p_node:
+            path = self.get_ancestors(p_node['name'], name_to_node, nodes) + [node_name]
+        else:
+            path = [node_name]
+        self.snp_to_ancestors[node_name] = path
+        return path
 
     def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
-        name_to_node = {node['name']: node for node in nodes.values()}
+        self.name_to_node = {node['name']: node for node in nodes.values()}
+        self.nodes_raw = nodes
         self.synonym_to_snp = {
             f"{node['root']}-{synonym['variant']}": node['name']
             for node in nodes.values()
             for synonym in node['variants']
         }
         self.snp_to_ancestors = {}
-
-        def get_ancestors(node_name):
-            if node_name in self.snp_to_ancestors:
-                return self.snp_to_ancestors[node_name]
-            node = name_to_node.get(node_name)
-            if not node:
-                return [node_name]
+        self.parent_to_children_raw = {}
+        for node in nodes.values():
             p_id = node.get('parentId')
             p_node = nodes.get(str(p_id)) if p_id else None
             if p_node:
-                path = get_ancestors(p_node['name']) + [node_name]
-            else:
-                path = [node_name]
-            self.snp_to_ancestors[node_name] = path
-            return path
-
+                self.parent_to_children_raw.setdefault(p_node['name'], []).append(node['name'])
         for node in nodes.values():
-            get_ancestors(node['name'])
+            self.get_ancestors(node['name'], self.name_to_node, self.nodes_raw)
         unique_active_snps = set()
+        active_set = set(self.synonym_to_snp.get(h, h) for h in active_haplogroups)
         for h in active_haplogroups:
-            canonical = self.synonym_to_snp.get(h, h)
-            unique_active_snps.update(get_ancestors(canonical))
+            resolved_snp = utils.resolve_para_groups(h, self.synonym_to_snp, active_set, self.parent_to_children_raw)
+            unique_active_snps.update(self.get_ancestors(resolved_snp, self.name_to_node, self.nodes_raw))
         self.all_snps = sorted(list(unique_active_snps))
         snp_to_idx = {snp: idx for idx, snp in enumerate(self.all_snps)}
         self.parent_indices = [-1] * len(self.all_snps)
         for idx, snp in enumerate(self.all_snps):
-            target_node = name_to_node.get(snp)
-            if target_node:
-                p_id = target_node.get('parentId')
-                p_node = nodes.get(str(p_id)) if p_id else None
-                if p_node and p_node['name'] in snp_to_idx:
-                    self.parent_indices[idx] = snp_to_idx[p_node['name']]
+            if snp.endswith('*'):
+                parent_name = snp[:-1]
+                if parent_name in snp_to_idx:
+                    self.parent_indices[idx] = snp_to_idx[parent_name]
+            else:
+                target_node = self.name_to_node.get(snp)
+                if target_node:
+                    p_id = target_node.get('parentId')
+                    p_node = self.nodes_raw.get(str(p_id)) if p_id else None
+                    if p_node and p_node['name'] in snp_to_idx:
+                        self.parent_indices[idx] = snp_to_idx[p_node['name']]
         self.snp_levels = [0] * len(self.all_snps)
         for i in range(len(self.all_snps)):
             path_len = 0
@@ -83,15 +100,16 @@ class HierarchyTopologyManager:
         children_map = {i: [] for i in range(-1, num_snps)}
         for child_idx, parent_idx in enumerate(self.parent_indices):
             children_map[parent_idx].append(child_idx)
+        active_set = set(self.synonym_to_snp.get(h, h) for h in haplogroups)
         for i, h in enumerate(haplogroups):
-            canonical = self.synonym_to_snp.get(h, h)
-            ancestors = self.snp_to_ancestors.get(canonical, [canonical])
+            target_snp = utils.resolve_para_groups(h, self.synonym_to_snp, active_set, self.parent_to_children_raw)
+            ancestors = self.get_ancestors(target_snp, self.name_to_node, self.nodes_raw)
             terminal_idx = -1
             for snp in ancestors:
                 if snp in snp_to_idx:
                     idx = snp_to_idx[snp]
                     labels[i, idx] = 1
-                    if snp == canonical:
+                    if snp == target_snp:
                         terminal_idx = idx
             if terminal_idx != -1:
                 queue = list(children_map[terminal_idx])
@@ -136,7 +154,8 @@ class GeneticDataset(Dataset):
                     if is_terminal_snp[deepest_local_idx]:
                         self.sample_is_terminal[i] = True
                         snp_name = all_snps[deepest_local_idx]
-                        age = snp_to_tmrca.get(snp_name, 500.0)
+                        lookup_name = snp_name[:-1] if snp_name.endswith('*') else snp_name
+                        age = snp_to_tmrca.get(lookup_name, 500.0)
                         self.sample_tmrca_years[i] = max(25.0, 1985.0 - float(age if age is not None else 500.0))
 
     def update_epoch_augmentation(self):
