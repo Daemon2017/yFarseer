@@ -39,6 +39,27 @@ class HierarchyTopologyManager:
 
     def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
+        extended_nodes = {int(k): v for k, v in nodes.items()}
+        next_virtual_id = max(extended_nodes.keys()) + 1 if extended_nodes else 1
+        all_parents_in_topo = set()
+        for node in nodes.values():
+            p_id = node.get('parentId')
+            if p_id is not None:
+                all_parents_in_topo.add(int(p_id))
+        for p_id in all_parents_in_topo:
+            parent_node = nodes[str(p_id)]
+            parent_name = parent_node['name']
+            virtual_name = f"{parent_name}*"
+            virtual_node = {
+                'id': next_virtual_id,
+                'name': virtual_name,
+                'parentId': p_id,
+                'root': parent_node.get('root', parent_name),
+                'variants': [{'variant': virtual_name}]
+            }
+            extended_nodes[next_virtual_id] = virtual_node
+            next_virtual_id += 1
+        nodes = {str(k): v for k, v in extended_nodes.items()}
         self.name_to_node = {node['name']: node for node in nodes.values()}
         self.nodes_raw = nodes
         self.synonym_to_snp = {
@@ -49,6 +70,8 @@ class HierarchyTopologyManager:
         self.snp_to_ancestors = {}
         self.parent_to_children_raw = {}
         for node in nodes.values():
+            if node['name'].endswith('*'):
+                continue
             p_id = node.get('parentId')
             p_node = nodes.get(str(p_id)) if p_id else None
             if p_node:
@@ -64,17 +87,12 @@ class HierarchyTopologyManager:
         snp_to_idx = {snp: idx for idx, snp in enumerate(self.all_snps)}
         self.parent_indices = [-1] * len(self.all_snps)
         for idx, snp in enumerate(self.all_snps):
-            if snp.endswith('*'):
-                parent_name = snp[:-1]
-                if parent_name in snp_to_idx:
-                    self.parent_indices[idx] = snp_to_idx[parent_name]
-            else:
-                target_node = self.name_to_node.get(snp)
-                if target_node:
-                    p_id = target_node.get('parentId')
-                    p_node = self.nodes_raw.get(str(p_id)) if p_id else None
-                    if p_node and p_node['name'] in snp_to_idx:
-                        self.parent_indices[idx] = snp_to_idx[p_node['name']]
+            target_node = self.name_to_node.get(snp)
+            if target_node:
+                p_id = target_node.get('parentId')
+                p_node = self.nodes_raw.get(str(p_id)) if p_id else None
+                if p_node and p_node['name'] in snp_to_idx:
+                    self.parent_indices[idx] = snp_to_idx[p_node['name']]
         self.snp_levels = [0] * len(self.all_snps)
         for i in range(len(self.all_snps)):
             path_len = 0
@@ -154,9 +172,14 @@ class GeneticDataset(Dataset):
                     if is_terminal_snp[deepest_local_idx]:
                         self.sample_is_terminal[i] = True
                         snp_name = all_snps[deepest_local_idx]
-                        lookup_name = snp_name[:-1] if snp_name.endswith('*') else snp_name
+                        if snp_name.endswith('*'):
+                            lookup_name = snp_name[:-1]
+                        else:
+                            lookup_name = snp_name
                         age = snp_to_tmrca.get(lookup_name, 500.0)
-                        self.sample_tmrca_years[i] = max(25.0, 1985.0 - float(age if age is not None else 500.0))
+                        if age is None:
+                            age = 500.0
+                        self.sample_tmrca_years[i] = max(25.0, 1985.0 - float(age))
 
     def update_epoch_augmentation(self):
         num_samples = len(self.base_features)
