@@ -204,7 +204,9 @@ class GeneticDataset(Dataset):
                                                                      p=p_norm)
                     else:
                         if len(all_mut_steps_indices) % 2 != 0:
-                            extra_fake_idx = np.random.choice(valid_indices)
+                            rates = self.mutation_rates_array[valid_indices]
+                            p_norm = rates / np.sum(rates)
+                            extra_fake_idx = np.random.choice(valid_indices, p=p_norm)
                             all_mut_steps_indices = np.append(all_mut_steps_indices, extra_fake_idx)
                     np.random.shuffle(all_mut_steps_indices)
                     half = len(all_mut_steps_indices) // 2
@@ -225,12 +227,14 @@ class GeneticDataset(Dataset):
                     feat[start_idx:actual_end] = np.sort(feat[start_idx:actual_end])
             except ValueError:
                 continue
+        is_orig_deletion = (self.base_features[idx] == 1)
+        feat = np.where((mask == 1.0) & (~is_orig_deletion),
+                        np.clip(feat, a_min=2.0, a_max=float(config.MAX_ALLELE - 1)), feat)
         if self.enable_dropout:
             keep_ratio = self.assigned_lengths[idx]
             dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
             mask = mask * dropout_mask
             feat = feat * mask
-        feat = np.clip(feat, a_min=0.0, a_max=float(config.MAX_ALLELE - 1))
         inputs = np.hstack([feat, mask])
         return (torch.tensor(inputs, dtype=torch.float32),
                 torch.tensor(self.labels[idx], dtype=torch.float32),
