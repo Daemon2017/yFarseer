@@ -24,45 +24,44 @@ if __name__ == '__main__':
     snp_to_tmrca = utils.get_snp_to_tmrca(dates.get('node', {}))
     df = utils.transform_dataset(df, True, 0, topology, snp_to_tmrca)
     print(f"Total rows: {len(df)}")
-    if config.IS_PARA_GROUPS_ENABLED:
-        synonym_to_snp = utils.get_synonym_to_snp(topology)
-        nodes = topology['allNodes']
-        parent_to_children_raw = {}
-        for node in nodes.values():
-            p_id = node.get('parentId')
-            p_node = nodes.get(str(p_id)) if p_id else None
-            if p_node:
-                parent_to_children_raw.setdefault(p_node['name'], []).append(node['name'])
-        all_dataset_haplogroups = df['Haplogroup'].unique().tolist()
-        active_set_full = set(synonym_to_snp.get(h, h) for h in all_dataset_haplogroups)
-        para_groups_snps = set()
-        for h in all_dataset_haplogroups:
-            resolved = utils.resolve_para_groups(h, synonym_to_snp, active_set_full, parent_to_children_raw)
-            if resolved.endswith('*'):
-                para_groups_snps.add(h)
-        df_para = df[df['Haplogroup'].isin(para_groups_snps)].reset_index(drop=True)
-        df_terminal = df[~df['Haplogroup'].isin(para_groups_snps)].reset_index(drop=True)
-        counts_terminal = df_terminal['Haplogroup'].value_counts()
-        df_terminal_singles = df_terminal[df_terminal['Haplogroup'].isin(counts_terminal[counts_terminal == 1].index)]
-        df_terminal_multiples = df_terminal[df_terminal['Haplogroup'].isin(counts_terminal[counts_terminal > 1].index)]
-        df_terminal_multiples_shuffled = df_terminal_multiples.sample(frac=1, random_state=42)
-        df_val = df_terminal_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
-        df_train_terminal_multi = df_terminal_multiples[~df_terminal_multiples.index.isin(df_val.index)]
-        df_train = pd.concat([df_train_terminal_multi, df_terminal_singles, df_para]) \
-            .sample(frac=1, random_state=42).reset_index(drop=True)
-        df_val = df_val.sample(frac=1, random_state=42).reset_index(drop=True)
-        print(f"Train: {len(df_train)} rows (includes {len(df_para)} para-group rows)")
-    else:
-        counts = df['Haplogroup'].value_counts()
-        df_singles = df[df['Haplogroup'].isin(counts[counts == 1].index)]
-        df_multiples = df[df['Haplogroup'].isin(counts[counts > 1].index)]
-        df_multiples_shuffled = df_multiples.sample(frac=1, random_state=42)
-        df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
-        df_train_multi = df_multiples[~df_multiples.index.isin(df_val.index)]
-        df_train = pd.concat([df_train_multi, df_singles]).sample(frac=1, random_state=42).reset_index(drop=True)
-        df_val = df_val.sample(frac=1, random_state=42).reset_index(drop=True)
-        print(f"Train: {len(df_train)} rows")
+    synonym_to_snp = utils.get_synonym_to_snp(topology)
+    nodes = topology['allNodes']
+    parent_to_children_raw = {}
+    for node in nodes.values():
+        p_id = node.get('parentId')
+        p_node = nodes.get(str(p_id)) if p_id else None
+        if p_node:
+            parent_to_children_raw.setdefault(p_node['name'], []).append(node['name'])
+    all_dataset_haplogroups = df['Haplogroup'].unique().tolist()
+    active_set_full = set(synonym_to_snp.get(h, h) for h in all_dataset_haplogroups)
+    para_groups_snps = set()
+    for h in all_dataset_haplogroups:
+        canonical = synonym_to_snp.get(h, h)
+        all_tree_children = parent_to_children_raw.get(canonical, [])
+        has_active_descendants = False
+        if all_tree_children:
+            stack = list(all_tree_children)
+            while stack:
+                curr = stack.pop()
+                if curr in active_set_full:
+                    has_active_descendants = True
+                    break
+                if curr in parent_to_children_raw:
+                    stack.extend(parent_to_children_raw[curr])
+        if has_active_descendants:
+            para_groups_snps.add(h)
+    df_para = df[df['Haplogroup'].isin(para_groups_snps)].reset_index(drop=True)
+    df_terminal = df[~df['Haplogroup'].isin(para_groups_snps)].reset_index(drop=True)
+    counts_terminal = df_terminal['Haplogroup'].value_counts()
+    df_terminal_singles = df_terminal[df_terminal['Haplogroup'].isin(counts_terminal[counts_terminal == 1].index)]
+    df_terminal_multiples = df_terminal[df_terminal['Haplogroup'].isin(counts_terminal[counts_terminal > 1].index)]
+    df_terminal_multiples_shuffled = df_terminal_multiples.sample(frac=1, random_state=42)
+    df_val = df_terminal_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
+    df_train_terminal_multi = df_terminal_multiples[~df_terminal_multiples.index.isin(df_val.index)]
+    df_train = pd.concat([df_train_terminal_multi, df_terminal_singles, df_para]) \
+        .sample(frac=1, random_state=42).reset_index(drop=True)
     df_val = df_val.sample(frac=1, random_state=42).reset_index(drop=True)
+    print(f"Train: {len(df_train)} rows (includes {len(para_groups_snps)} para-groups)")
     print(f"Validation: {len(df_val)} rows")
     print("Loading topology based on train set...")
     unique_train_haplogroups = df_train['Haplogroup'].unique().tolist()
