@@ -7,7 +7,6 @@ from torch import nn
 from torch.utils.data import Dataset, Sampler
 
 import config
-import utils
 
 
 class HierarchyTopologyManager:
@@ -20,9 +19,6 @@ class HierarchyTopologyManager:
         self.parent_to_children_raw = {}
 
     def get_ancestors(self, node_name, name_to_node, nodes):
-        if node_name.endswith('*'):
-            base_node = node_name[:-1]
-            return self.get_ancestors(base_node, name_to_node, nodes) + [node_name]
         if node_name in self.snp_to_ancestors:
             return self.snp_to_ancestors[node_name]
         node = name_to_node.get(node_name)
@@ -39,27 +35,6 @@ class HierarchyTopologyManager:
 
     def prepare_topology(self, active_haplogroups, topology_data):
         nodes = topology_data['allNodes']
-        extended_nodes = {int(k): v for k, v in nodes.items()}
-        next_virtual_id = max(extended_nodes.keys()) + 1 if extended_nodes else 1
-        all_parents_in_topo = set()
-        for node in nodes.values():
-            p_id = node.get('parentId')
-            if p_id is not None:
-                all_parents_in_topo.add(int(p_id))
-        for p_id in all_parents_in_topo:
-            parent_node = nodes[str(p_id)]
-            parent_name = parent_node['name']
-            virtual_name = f"{parent_name}*"
-            virtual_node = {
-                'id': next_virtual_id,
-                'name': virtual_name,
-                'parentId': p_id,
-                'root': parent_node.get('root', parent_name),
-                'variants': [{'variant': virtual_name}]
-            }
-            extended_nodes[next_virtual_id] = virtual_node
-            next_virtual_id += 1
-        nodes = {str(k): v for k, v in extended_nodes.items()}
         self.name_to_node = {node['name']: node for node in nodes.values()}
         self.nodes_raw = nodes
         self.synonym_to_snp = {
@@ -70,8 +45,6 @@ class HierarchyTopologyManager:
         self.snp_to_ancestors = {}
         self.parent_to_children_raw = {}
         for node in nodes.values():
-            if node['name'].endswith('*'):
-                continue
             p_id = node.get('parentId')
             p_node = nodes.get(str(p_id)) if p_id else None
             if p_node:
@@ -79,9 +52,8 @@ class HierarchyTopologyManager:
         for node in nodes.values():
             self.get_ancestors(node['name'], self.name_to_node, self.nodes_raw)
         unique_active_snps = set()
-        active_set = set(self.synonym_to_snp.get(h, h) for h in active_haplogroups)
         for h in active_haplogroups:
-            resolved_snp = utils.resolve_para_groups(h, self.synonym_to_snp, active_set, self.parent_to_children_raw)
+            resolved_snp = self.synonym_to_snp.get(h, h)
             unique_active_snps.update(self.get_ancestors(resolved_snp, self.name_to_node, self.nodes_raw))
         self.all_snps = sorted(list(unique_active_snps))
         snp_to_idx = {snp: idx for idx, snp in enumerate(self.all_snps)}
@@ -118,9 +90,8 @@ class HierarchyTopologyManager:
         children_map = {i: [] for i in range(-1, num_snps)}
         for child_idx, parent_idx in enumerate(self.parent_indices):
             children_map[parent_idx].append(child_idx)
-        active_set = set(self.synonym_to_snp.get(h, h) for h in haplogroups)
         for i, h in enumerate(haplogroups):
-            target_snp = utils.resolve_para_groups(h, self.synonym_to_snp, active_set, self.parent_to_children_raw)
+            target_snp = self.synonym_to_snp.get(h, h)
             ancestors = self.get_ancestors(target_snp, self.name_to_node, self.nodes_raw)
             terminal_idx = -1
             for snp in ancestors:
@@ -171,11 +142,7 @@ class GeneticDataset(Dataset):
                     deepest_local_idx = active_snp_indices[np.argmax(snp_levels_np[active_snp_indices])]
                     if is_terminal_snp[deepest_local_idx]:
                         self.sample_is_terminal[i] = True
-                        snp_name = all_snps[deepest_local_idx]
-                        if snp_name.endswith('*'):
-                            lookup_name = snp_name[:-1]
-                        else:
-                            lookup_name = snp_name
+                        lookup_name = all_snps[deepest_local_idx]
                         age = snp_to_tmrca.get(lookup_name, 500.0)
                         if age is None:
                             age = 500.0
