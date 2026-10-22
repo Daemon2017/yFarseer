@@ -37,7 +37,7 @@ if __name__ == '__main__':
     print("Loading topology based on train set...")
     unique_train_haplogroups = df_train['Haplogroup'].unique().tolist()
     topo_manager = classes.HierarchyTopologyManager()
-    topo_manager.prepare_topology(unique_train_haplogroups, topology)
+    topo_manager.prepare_topology(unique_train_haplogroups, topology, dates)
     print(f"Total SNPs: {len(topo_manager.all_snps)}")
     train_feat, train_mask = utils.build_matrices(df_train)
     val_feat, val_mask = utils.build_matrices(df_val)
@@ -53,11 +53,11 @@ if __name__ == '__main__':
     train_dataset = classes.GeneticDataset(train_feat, train_mask, train_labels, train_lmasks, enable_dropout=True,
                                            enable_mutations=True, all_snps=topo_manager.all_snps,
                                            snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,
-                                           snp_levels=topo_manager.snp_levels)
+                                           snp_depth_years=topo_manager.snp_depth_years)
     val_dataset = classes.GeneticDataset(val_feat, val_mask, val_labels, val_lmasks, enable_dropout=False,
                                          enable_mutations=False, all_snps=topo_manager.all_snps,
                                          snp_to_tmrca=snp_to_tmrca, parent_indices=topo_manager.parent_indices,
-                                         snp_levels=topo_manager.snp_levels)
+                                         snp_depth_years=topo_manager.snp_depth_years)
     print("Preparing sampler...")
     train_batch_sampler = classes.PairAdversarialBatchSampler(dataset=train_dataset, batch_size=config.BATCH_SIZE,
                                                               df_train=df_train)
@@ -74,9 +74,8 @@ if __name__ == '__main__':
     print("Preparing model...")
     model = classes.GeneticEmbeddingMLP(num_str_markers=num_str_markers, max_allele_val=config.MAX_ALLELE,
                                         embedding_dim=config.EMBEDDING_DIM, output_dim=output_dim,
-                                        snp_levels=topo_manager.snp_levels).to(config.DEVICE)
-    print(f"Maximum tree depth: {model.max_level} SNPs")
-    criterion = classes.MaskedBCELoss(pos_weight=pos_weight_tensor, level_tensor=model.level_tensor,
+                                        snp_depth_years=topo_manager.snp_depth_years).to(config.DEVICE)
+    criterion = classes.MaskedBCELoss(pos_weight=pos_weight_tensor, depth_tensor=model.depth_tensor,
                                       parent_indices=topo_manager.parent_indices).to(config.DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.LEARNING_RATE, weight_decay=1e-2)
     scheduler = CosineAnnealingLR(optimizer, T_max=config.EPOCHS, eta_min=config.LEARNING_RATE / config.EPOCHS)

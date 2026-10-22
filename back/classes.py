@@ -7,6 +7,7 @@ from torch import nn
 from torch.utils.data import Dataset, Sampler
 
 import config
+import utils
 
 
 class HierarchyTopologyManager:
@@ -15,8 +16,11 @@ class HierarchyTopologyManager:
         self.snp_to_ancestors = {}
         self.all_snps = []
         self.parent_indices = []
-        self.snp_levels = []
         self.parent_to_children_raw = {}
+        self.name_to_node = {}
+        self.nodes_raw = []
+        self.snp_ages = []
+        self.snp_depth_years = []
 
     def get_ancestors(self, node_name, name_to_node, nodes):
         if node_name in self.snp_to_ancestors:
@@ -33,7 +37,7 @@ class HierarchyTopologyManager:
         self.snp_to_ancestors[node_name] = path
         return path
 
-    def prepare_topology(self, active_haplogroups, topology_data):
+    def prepare_topology(self, active_haplogroups, topology_data, dates_data):
         nodes = topology_data['allNodes']
         self.name_to_node = {node['name']: node for node in nodes.values()}
         self.nodes_raw = nodes
@@ -65,21 +69,23 @@ class HierarchyTopologyManager:
                 p_node = self.nodes_raw.get(str(p_id)) if p_id else None
                 if p_node and p_node['name'] in snp_to_idx:
                     self.parent_indices[idx] = snp_to_idx[p_node['name']]
-        self.snp_levels = [0] * len(self.all_snps)
-        for i in range(len(self.all_snps)):
-            path_len = 0
-            curr = self.parent_indices[i]
-            while curr != -1:
-                path_len += 1
-                curr = self.parent_indices[curr]
-            self.snp_levels[i] = path_len
+        snp_to_tmrca = utils.get_snp_to_tmrca(dates_data.get('node', {}))
+        self.snp_ages = [500.0] * len(self.all_snps)
+        for idx, snp in enumerate(self.all_snps):
+            lookup_name = snp[:-1] if snp.endswith('*') else snp
+            age = snp_to_tmrca.get(lookup_name, 500.0)
+            self.snp_ages[idx] = float(age if age is not None else 500.0)
+        min_tree_age = min(self.snp_ages) if self.snp_ages else -230000.0
+        self.snp_depth_years = [age - min_tree_age for age in self.snp_ages]
         os.makedirs(config.MODEL_DIR, exist_ok=True)
         with open(os.path.join(config.MODEL_DIR, 'snp_list.json'), 'w', encoding='utf-8') as f:
             json.dump(self.all_snps, f, ensure_ascii=False)
         with open(os.path.join(config.MODEL_DIR, 'parent_indices.json'), 'w', encoding='utf-8') as f:
             json.dump(self.parent_indices, f, ensure_ascii=False)
-        with open(os.path.join(config.MODEL_DIR, 'snp_levels.json'), 'w', encoding='utf-8') as f:
-            json.dump(self.snp_levels, f, ensure_ascii=False)
+        with open(os.path.join(config.MODEL_DIR, 'snp_ages.json'), 'w', encoding='utf-8') as f:
+            json.dump(self.snp_ages, f, ensure_ascii=False)
+        with open(os.path.join(config.MODEL_DIR, 'snp_depth_years.json'), 'w', encoding='utf-8') as f:
+            json.dump(self.snp_depth_years, f, ensure_ascii=False)
 
     def generate_labels_and_masks(self, haplogroups):
         num_samples = len(haplogroups)
@@ -111,7 +117,7 @@ class HierarchyTopologyManager:
 
 class GeneticDataset(Dataset):
     def __init__(self, features, masks, labels, loss_masks, enable_dropout=None, enable_mutations=None, all_snps=None,
-                 snp_to_tmrca=None, parent_indices=None, snp_levels=None):
+                 snp_to_tmrca=None, parent_indices=None, snp_depth_years=None):
         self.base_features = features
         self.masks = masks
         self.labels = labels
@@ -130,12 +136,12 @@ class GeneticDataset(Dataset):
         self.mutation_rates_array = np.array(base_rates, dtype=np.float32)
         self.sample_is_terminal = np.zeros(len(features), dtype=bool)
         self.sample_tmrca_years = np.zeros(len(features), dtype=np.float32)
-        if self.enable_mutations and all_snps and parent_indices and snp_levels:
+        if self.enable_mutations and all_snps and parent_indices and snp_depth_years:
             is_terminal_snp = np.ones(len(all_snps), dtype=bool)
             for p_idx in parent_indices:
                 if p_idx != -1 and p_idx < len(is_terminal_snp):
                     is_terminal_snp[p_idx] = False
-            snp_levels_np = np.array(snp_levels, dtype=np.int32)
+            snp_levels_np = np.array(snp_depth_years, dtype=np.int32)
             for i in range(len(features)):
                 active_snp_indices = np.where(labels[i] == 1.0)[0]
                 if len(active_snp_indices) > 0:
@@ -232,7 +238,7 @@ class GeneticDataset(Dataset):
 
 
 class GeneticEmbeddingMLP(nn.Module):
-    def __init__(self, num_str_markers, max_allele_val, embedding_dim, output_dim, snp_levels=None):
+    def __init__(self, num_str_markers, max_allele_val, embedding_dim, output_dim, snp_depth_years=None):
         super().__init__()
         self.num_str_markers = num_str_markers
         self.embedding_dim = embedding_dim
@@ -255,8 +261,16 @@ class GeneticEmbeddingMLP(nn.Module):
             nn.Dropout(0.3)
         )
         self.output_layer = nn.Linear((config.LAYER_DIM * 2) + config.LAYER_DIM + total_input_dim, output_dim)
-        self.register_buffer('level_tensor', torch.tensor(snp_levels or [], dtype=torch.long), persistent=False)
-        self.max_level = max(snp_levels) if snp_levels and len(snp_levels) > 0 else 0
+        if snp_depth_years and len(snp_depth_years) > 0:
+            max_depth = max(snp_depth_years) if max(snp_depth_years) > 0 else 1.0
+            normalized_depths = [float(d) / max_depth * 10.0 for d in snp_depth_years]
+            self.levels_list = [int(round(d)) for d in normalized_depths]
+        else:
+            normalized_depths = []
+            self.levels_list = []
+        self.register_buffer('depth_tensor', torch.tensor(normalized_depths, dtype=torch.float32), persistent=False)
+        self.register_buffer('level_tensor', torch.tensor(self.levels_list, dtype=torch.long), persistent=False)
+        self.max_level = max(self.levels_list) if self.levels_list else 0
 
     def forward(self, x):
         batch_size = x.size(0)
@@ -271,10 +285,10 @@ class GeneticEmbeddingMLP(nn.Module):
 
 
 class MaskedBCELoss(nn.Module):
-    def __init__(self, pos_weight, level_tensor, parent_indices):
+    def __init__(self, pos_weight, depth_tensor, parent_indices):
         super().__init__()
         self.register_buffer("pos_weight", pos_weight.clone().detach().unsqueeze(0))
-        self.register_buffer("level_tensor", level_tensor.clone().detach())
+        self.register_buffer("depth_tensor", depth_tensor.clone().detach())
         output_dim = len(parent_indices)
         row_indices = []
         col_indices = []
@@ -299,10 +313,10 @@ class MaskedBCELoss(nn.Module):
 
     def forward(self, logits, targets, masks):
         p_h = self.compute_hierarchical_probs(logits)
-        fp_weight = 1.0 + (self.level_tensor.float() / 20.0)
+        fp_weight = 1.0 + (self.depth_tensor / 10.0)
         fp_weight = fp_weight.unsqueeze(0)
         loss = - (self.pos_weight * targets * torch.log(p_h) + fp_weight * (1.0 - targets) * torch.log(1.0 - p_h))
-        loss *= (1.0 + torch.log1p(self.level_tensor.float())).unsqueeze(0)
+        loss *= (1.0 + (self.depth_tensor / 5.0)).unsqueeze(0)
         loss *= masks
         panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
         loss *= panel_completeness
@@ -317,7 +331,12 @@ class PairAdversarialBatchSampler(Sampler):
         self.num_samples = len(dataset)
         self.top_n_convergence = 8
         feats = dataset.base_features.astype(np.float32)
-        dot_product = np.dot(feats, feats.T)
+        base_rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
+        mutation_rates = np.array(base_rates, dtype=np.float32)
+        marker_weights = np.log(1.0 / (mutation_rates + 1e-5))
+        marker_weights = marker_weights / np.mean(marker_weights)
+        scaled_feats = feats * np.sqrt(marker_weights)
+        dot_product = np.dot(scaled_feats, scaled_feats.T)
         diag = np.diag(dot_product)
         str_dist = diag[:, None] + diag[None, :] - 2 * dot_product
         str_dist = np.sqrt(np.clip(str_dist, 0, None))
