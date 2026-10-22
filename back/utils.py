@@ -134,7 +134,7 @@ def split_multicopies(df):
     return transformed
 
 
-def transform_dataset(df, only_complete=True, age_threshold=0, topology=None, snp_to_tmrca=None):
+def transform_dataset(df, age_threshold=0, topology=None, snp_to_tmrca=None):
     df = df.dropna(subset=['Haplogroup'])
     df = df[~df['Haplogroup'].isin(['-'])]
     synonym_to_snp = get_synonym_to_snp(topology)
@@ -147,6 +147,48 @@ def transform_dataset(df, only_complete=True, age_threshold=0, topology=None, sn
     df_clean = pd.DataFrame(splited, index=df.index)[config.EXTENDED_STR_COLS]
     df_clean['Haplogroup'] = df['Haplogroup'].values
     df_clean = df_clean.drop_duplicates(subset=config.EXTENDED_STR_COLS + ['Haplogroup'])
-    if only_complete:
-        df_clean = df_clean.dropna(subset=config.EXTENDED_STR_COLS)
+    df_clean = df_clean.dropna(subset=config.EXTENDED_STR_COLS)
     return df_clean
+
+
+def split_dataset(df, topology, random_state=42):
+    nodes = topology.get('allNodes', {})
+    name_to_node = {node['name']: node for node in nodes.values()}
+    synonym_to_snp = get_synonym_to_snp(topology)
+    memo = {}
+
+    def get_ancestors_local(node_name):
+        if node_name in memo:
+            return memo[node_name]
+        node = name_to_node.get(node_name)
+        if not node:
+            return [node_name]
+        p_id = node.get('parentId')
+        p_node = nodes.get(str(p_id)) if p_id else None
+        if p_node:
+            path = get_ancestors_local(p_node['name']) + [node_name]
+        else:
+            path = [node_name]
+        memo[node_name] = path
+        return path
+
+    factual_parents = set()
+    for h in df['Haplogroup'].unique():
+        resolved_snp = synonym_to_snp.get(h, h)
+        path = get_ancestors_local(resolved_snp)
+        if len(path) > 1:
+            factual_parents.update(path[:-1])
+    canonical_series = df['Haplogroup'].map(synonym_to_snp).fillna(df['Haplogroup'])
+    intermediate_mask = canonical_series.isin(factual_parents)
+    df_intermediate = df[intermediate_mask]
+    df_terminal_all = df[~intermediate_mask]
+    counts = df_terminal_all['Haplogroup'].value_counts()
+    df_singles = df_terminal_all[df_terminal_all['Haplogroup'].isin(counts[counts == 1].index)]
+    df_multiples = df_terminal_all[df_terminal_all['Haplogroup'].isin(counts[counts > 1].index)]
+    df_multiples_shuffled = df_multiples.sample(frac=1, random_state=random_state)
+    df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
+    df_train_multi = df_multiples[~df_multiples.index.isin(df_val.index)]
+    df_train = pd.concat([df_intermediate, df_train_multi, df_singles])
+    df_train = df_train.sample(frac=1, random_state=random_state).reset_index(drop=True)
+    df_val = df_val.sample(frac=1, random_state=random_state).reset_index(drop=True)
+    return df_train, df_val, len(df_intermediate), len(df_terminal_all)

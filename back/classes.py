@@ -313,8 +313,7 @@ class MaskedBCELoss(nn.Module):
 
     def forward(self, logits, targets, masks):
         p_h = self.compute_hierarchical_probs(logits)
-        fp_weight = 1.0 + (self.depth_tensor / 10.0)
-        fp_weight = fp_weight.unsqueeze(0)
+        fp_weight = (1.0 + (self.depth_tensor / 10.0)).unsqueeze(0)
         loss = - (self.pos_weight * targets * torch.log(p_h) + fp_weight * (1.0 - targets) * torch.log(1.0 - p_h))
         loss *= (1.0 + (self.depth_tensor / 5.0)).unsqueeze(0)
         loss *= masks

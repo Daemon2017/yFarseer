@@ -22,18 +22,14 @@ if __name__ == '__main__':
     df = pd.read_csv(config.HAPLOTYPES_FILE, usecols=config.BASE_STR_COLS + ['Haplogroup'], dtype=str_dtypes,
                      low_memory=False, encoding='utf-8')
     snp_to_tmrca = utils.get_snp_to_tmrca(dates.get('node', {}))
-    df = utils.transform_dataset(df, True, 0, topology, snp_to_tmrca)
+    df = utils.transform_dataset(df, 0, topology, snp_to_tmrca)
     print(f"Total rows: {len(df)}")
-    counts = df['Haplogroup'].value_counts()
-    df_singles = df[df['Haplogroup'].isin(counts[counts == 1].index)]
-    df_multiples = df[df['Haplogroup'].isin(counts[counts > 1].index)]
-    df_multiples_shuffled = df_multiples.sample(frac=1, random_state=42)
-    df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
-    df_train_multi = df_multiples[~df_multiples.index.isin(df_val.index)]
-    df_train = pd.concat([df_train_multi, df_singles]).sample(frac=1, random_state=42).reset_index(drop=True)
-    df_val = df_val.sample(frac=1, random_state=42).reset_index(drop=True)
-    print(f"Train: {len(df_train)} rows")
-    print(f"Validation: {len(df_val)} rows")
+    print("Splitting dataset...")
+    df_train, df_val, num_inter, num_term = utils.split_dataset(df, topology, random_state=42)
+    print(f"Intermediate SNPs samples: {num_inter}")
+    print(f"Terminal SNPs samples: {num_term}")
+    print(f"Train samples: {len(df_train)}")
+    print(f"Validation samples: {len(df_val)}")
     print("Loading topology based on train set...")
     unique_train_haplogroups = df_train['Haplogroup'].unique().tolist()
     topo_manager = classes.HierarchyTopologyManager()
