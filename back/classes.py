@@ -317,8 +317,7 @@ class MaskedBCELoss(nn.Module):
         loss = - (self.pos_weight * targets * torch.log(p_h) + fp_weight * (1.0 - targets) * torch.log(1.0 - p_h))
         loss *= (1.0 + (self.depth_tensor / 5.0)).unsqueeze(0)
         loss *= masks
-        panel_completeness = masks.sum(dim=1, keepdim=True) / masks.size(1)
-        loss *= panel_completeness
+        loss *= torch.sqrt(masks.sum(dim=1, keepdim=True) / masks.size(1))
         return loss.sum() / (masks.sum() + 1e-8)
 
 
