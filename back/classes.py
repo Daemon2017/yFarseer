@@ -302,12 +302,36 @@ class MaskedBCELoss(nn.Module):
         values = torch.ones(len(row_indices), dtype=torch.float32)
         sparse_ancestry = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
         self.register_buffer('ancestry_matrix', sparse_ancestry, persistent=False)
+        parent_to_children = {}
+        for child_idx, parent_idx in enumerate(parent_indices):
+            parent_to_children.setdefault(parent_idx, []).append(child_idx)
+        self.single_child_mask = torch.zeros(output_dim, dtype=torch.bool)
+        b_rows = []
+        b_cols = []
+        for children in parent_to_children.values():
+            if len(children) == 1:
+                self.single_child_mask[children] = True
+            else:
+                for c1 in children:
+                    for c2 in children:
+                        b_rows.append(c1)
+                        b_cols.append(c2)
+        b_indices = torch.tensor([b_rows, b_cols], dtype=torch.long)
+        b_values = torch.ones(len(b_rows), dtype=torch.float32)
+        sparse_brother = torch.sparse_coo_tensor(b_indices, b_values, (output_dim, output_dim))
+        self.register_buffer('brother_matrix', sparse_brother, persistent=False)
+        self.register_buffer('is_single_child', self.single_child_mask, persistent=False)
 
     def compute_hierarchical_probs(self, logits):
         eps = 1e-7
-        probs_raw = torch.sigmoid(logits)
-        log_probs_raw = torch.log(probs_raw + eps)
-        hierarchical_log_probs = log_probs_raw + torch.sparse.mm(self.ancestry_matrix, log_probs_raw.t()).t()
+        sig_probs = torch.sigmoid(logits)
+        exp_logits = torch.exp(torch.clamp(logits, max=12.0))
+        brother_sums = torch.sparse.mm(self.brother_matrix, exp_logits.t()).t()
+        softmax_probs = exp_logits / (1.0 + brother_sums + eps)
+        cond_probs = torch.where(self.is_single_child.unsqueeze(0), sig_probs, softmax_probs)
+        cond_probs = torch.clamp(cond_probs, min=eps, max=1.0)
+        log_cond_probs = torch.log(cond_probs)
+        hierarchical_log_probs = log_cond_probs + torch.sparse.mm(self.ancestry_matrix, log_cond_probs.t()).t()
         p_h = torch.clamp(torch.exp(hierarchical_log_probs), min=eps, max=1.0 - eps)
         return p_h
 
