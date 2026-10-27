@@ -358,19 +358,23 @@ class PairAdversarialBatchSampler(Sampler):
         marker_weights = np.log(1.0 / (mutation_rates + 1e-5))
         marker_weights = marker_weights / np.mean(marker_weights)
         scaled_feats = feats * np.sqrt(marker_weights)
-        dot_product = np.dot(scaled_feats, scaled_feats.T)
-        diag = np.diag(dot_product)
-        str_dist = diag[:, None] + diag[None, :] - 2 * dot_product
-        str_dist = np.sqrt(np.clip(str_dist, 0, None))
-        np.fill_diagonal(str_dist, 1e9)
         haplogroups = df_train['Haplogroup'].values
-        same_hg_mask = (haplogroups[:, None] == haplogroups[None, :])
-        str_dist[same_hg_mask] = 1e9
+        diag = np.sum(scaled_feats ** 2, axis=1)
         self.adversarial_pools = {}
-        for i in range(self.num_samples):
-            sorted_positions = np.argsort(str_dist[i])
-            top_positions = sorted_positions[:self.top_n_convergence]
-            self.adversarial_pools[i] = top_positions.tolist()
+        step = 2000
+        for start_idx in range(0, self.num_samples, step):
+            end_idx = min(start_idx + step, self.num_samples)
+            dot_chunk = np.dot(scaled_feats[start_idx:end_idx], scaled_feats.T)
+            dist_chunk = diag[start_idx:end_idx, None] + diag[None, :] - 2 * dot_chunk
+            dist_chunk = np.sqrt(np.clip(dist_chunk, 0, None))
+            chunk_hg = haplogroups[start_idx:end_idx]
+            same_hg_chunk = (chunk_hg[:, None] == haplogroups[None, :])
+            dist_chunk[same_hg_chunk] = 1e9
+            for local_i, global_i in enumerate(range(start_idx, end_idx)):
+                dist_chunk[local_i, global_i] = 1e9
+                top_positions = np.argpartition(dist_chunk[local_i], self.top_n_convergence)[:self.top_n_convergence]
+                top_positions = top_positions[np.argsort(dist_chunk[local_i][top_positions])]
+                self.adversarial_pools[global_i] = top_positions.tolist()
 
     def __iter__(self):
         indices = np.arange(self.num_samples)
