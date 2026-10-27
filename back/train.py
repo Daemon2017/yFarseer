@@ -61,9 +61,14 @@ if __name__ == '__main__':
                               persistent_workers=True)
     val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, num_workers=1, pin_memory=True,
                             persistent_workers=True)
-    cached_val_batches = []
-    for inputs, labels, masks in val_loader:
-        cached_val_batches.append((inputs, labels.float(), masks.float()))
+    loader = None
+    if config.IS_LOW_MEMORY:
+        loader = val_loader
+    else:
+        cached_val_batches = []
+        for inputs, labels, masks in val_loader:
+            cached_val_batches.append((inputs, labels.float(), masks.float()))
+        loader = cached_val_batches
     output_dim = train_labels.shape[1]
     num_str_markers = train_feat.shape[1]
     pos_weight_tensor = torch.ones(output_dim, dtype=torch.float32).to(config.DEVICE)
@@ -105,7 +110,7 @@ if __name__ == '__main__':
         train_f1 = train_stats["total_f1"] / train_count
         train_finish_time = time.time() - train_start_time
         val_start_time = time.time()
-        val_loss, val_f1, val_report = utils.evaluate_model(model=model, loader=cached_val_batches, criterion=criterion,
+        val_loss, val_f1, val_report = utils.evaluate_model(model=model, loader=loader, criterion=criterion,
                                                             device=config.DEVICE)
         scheduler.step()
         val_finish_time = time.time() - val_start_time
