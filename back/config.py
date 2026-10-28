@@ -14,6 +14,7 @@ MAX_ALLELE = 50
 TRAIN_THRESHOLD = 0.5
 
 IS_LOW_MEMORY = False
+IS_TRAIN_METRICS = False
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 

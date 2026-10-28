@@ -102,12 +102,17 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            utils.accumulate_metrics_from_batch(outputs=outputs, targets=targets, masks=masks, stats=train_stats,
-                                                criterion=criterion)
+            if config.IS_TRAIN_METRICS:
+                utils.accumulate_metrics_from_batch(outputs=outputs, targets=targets, masks=masks, stats=train_stats,
+                                                    criterion=criterion)
         train_loss /= total_train_samples
-        train_count = train_stats["count"] + 1e-8
-        train_emr = train_stats["exact"] / train_count
-        train_f1 = train_stats["total_f1"] / train_count
+        if config.IS_TRAIN_METRICS:
+            train_count = train_stats["count"] + 1e-8
+            train_emr = train_stats["exact"] / train_count
+            train_f1 = train_stats["total_f1"] / train_count
+        else:
+            train_emr = 0.0
+            train_f1 = 0.0
         train_finish_time = time.time() - train_start_time
         val_start_time = time.time()
         val_loss, val_f1, val_report = utils.evaluate_model(model=model, loader=loader, criterion=criterion,
