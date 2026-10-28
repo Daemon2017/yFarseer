@@ -352,29 +352,37 @@ class PairAdversarialBatchSampler(Sampler):
         self.batch_size = batch_size
         self.num_samples = len(dataset)
         self.top_n_convergence = 8
+        device = torch.device(config.DEVICE if torch.cuda.is_available() else 'cpu')
         feats = dataset.base_features.astype(np.float32)
         base_rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
         mutation_rates = np.array(base_rates, dtype=np.float32)
         marker_weights = np.log(1.0 / (mutation_rates + 1e-5))
         marker_weights = marker_weights / np.mean(marker_weights)
-        scaled_feats = feats * np.sqrt(marker_weights)
+        scaled_feats_np = feats * np.sqrt(marker_weights)
+        scaled_feats = torch.from_numpy(scaled_feats_np).to(device)
         haplogroups = df_train['Haplogroup'].values
-        diag = np.sum(scaled_feats ** 2, axis=1)
-        self.adversarial_pools = {}
-        step = 2000
-        for start_idx in range(0, self.num_samples, step):
-            end_idx = min(start_idx + step, self.num_samples)
-            dot_chunk = np.dot(scaled_feats[start_idx:end_idx], scaled_feats.T)
-            dist_chunk = diag[start_idx:end_idx, None] + diag[None, :] - 2 * dot_chunk
-            dist_chunk = np.sqrt(np.clip(dist_chunk, 0, None))
-            chunk_hg = haplogroups[start_idx:end_idx]
-            same_hg_chunk = (chunk_hg[:, None] == haplogroups[None, :])
-            dist_chunk[same_hg_chunk] = 1e9
-            for local_i, global_i in enumerate(range(start_idx, end_idx)):
-                dist_chunk[local_i, global_i] = 1e9
-                top_positions = np.argpartition(dist_chunk[local_i], self.top_n_convergence)[:self.top_n_convergence]
-                top_positions = top_positions[np.argsort(dist_chunk[local_i][top_positions])]
-                self.adversarial_pools[global_i] = top_positions.tolist()
+        _, hg_encoded = np.unique(haplogroups, return_inverse=True)
+        hg_tensor = torch.from_numpy(hg_encoded).to(device)
+        self.adversarial_pools_tensor = torch.zeros((self.num_samples, self.top_n_convergence), dtype=torch.long)
+        chunk_size = 5000
+        with torch.no_grad():
+            feats_sq_norm = torch.sum(scaled_feats ** 2, dim=1)
+            for start_idx in range(0, self.num_samples, chunk_size):
+                end_idx = min(start_idx + chunk_size, self.num_samples)
+                chunk_feats = scaled_feats[start_idx:end_idx]
+                dot_product = torch.matmul(chunk_feats, scaled_feats.t())
+                dist_chunk = feats_sq_norm[start_idx:end_idx, None] + feats_sq_norm[None, :] - 2 * dot_product
+                dist_chunk = torch.sqrt(torch.clamp(dist_chunk, min=0.0))
+                identity_mask = torch.eye(end_idx - start_idx, device=device, dtype=torch.bool)
+                dist_chunk[:, start_idx:end_idx] = torch.where(identity_mask, torch.tensor(1e9, device=device),
+                                                               dist_chunk[:, start_idx:end_idx])
+                same_hg_mask = hg_tensor[start_idx:end_idx, None] == hg_tensor[None, :]
+                dist_chunk = torch.where(same_hg_mask, torch.tensor(1e9, device=device), dist_chunk)
+                top_k_indices = torch.topk(dist_chunk, k=self.top_n_convergence, dim=1, largest=False).indices
+                self.adversarial_pools_tensor[start_idx:end_idx] = top_k_indices.cpu()
+        self.adversarial_pools = self.adversarial_pools_tensor.numpy()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def __iter__(self):
         indices = np.arange(self.num_samples)
