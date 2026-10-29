@@ -199,3 +199,8 @@ def split_dataset(df, topology, random_state=42):
     df_train = df_train.sample(frac=1, random_state=random_state).reset_index(drop=True)
     df_val = df_val.sample(frac=1, random_state=random_state).reset_index(drop=True)
     return df_train, df_val, len(df_intermediate), len(df_terminal_all)
+
+
+def worker_init_fn(worker_id):
+    worker_seed = torch.initial_seed() % 2 ** 32
+    np.random.default_rng(worker_seed)

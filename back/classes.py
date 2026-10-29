@@ -117,7 +117,7 @@ class HierarchyTopologyManager:
 
 class GeneticDataset(Dataset):
     def __init__(self, features, masks, labels, loss_masks, enable_dropout=None, enable_mutations=None, all_snps=None,
-                 snp_to_tmrca=None, parent_indices=None, snp_depth_years=None):
+                 snp_to_tmrca=None, parent_indices=None, snp_depth_years=None, base_seed=42):
         self.base_features = features
         self.masks = masks
         self.labels = labels
@@ -128,8 +128,11 @@ class GeneticDataset(Dataset):
         self.all_snps = all_snps
         self.parent_indices = parent_indices
         self.assigned_lengths = np.zeros(len(features), dtype=np.int32)
+        self.base_seed = base_seed
+        self.rng = None
         if self.enable_dropout or self.enable_mutations:
-            self.update_epoch_augmentation()
+            init_rng = np.random.default_rng(self.base_seed)
+            self.assigned_lengths = 0.1 + (init_rng.random(len(self.base_features)) * 0.9)
         self.idx_389i = config.EXTENDED_STR_COLS.index('DYS389i') if 'DYS389i' in config.EXTENDED_STR_COLS else None
         self.idx_389ii = config.EXTENDED_STR_COLS.index('DYS389ii') if 'DYS389ii' in config.EXTENDED_STR_COLS else None
         base_rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
@@ -155,13 +158,18 @@ class GeneticDataset(Dataset):
                         self.sample_tmrca_years[i] = max(25.0, 1985.0 - float(age))
 
     def update_epoch_augmentation(self):
+        current_rng = self.rng if self.rng is not None else np.random.default_rng(self.base_seed)
         num_samples = len(self.base_features)
-        self.assigned_lengths = 0.1 + (np.random.rand(num_samples) * 0.9)
+        self.assigned_lengths = 0.1 + (current_rng.random(num_samples) * 0.9)
 
     def __len__(self):
         return len(self.base_features)
 
     def __getitem__(self, idx):
+        if self.rng is None:
+            worker_info = torch.utils.data.get_worker_info()
+            worker_id = worker_info.id if worker_info is not None else 0
+            self.rng = np.random.default_rng(self.base_seed + worker_id)
         need_mutations = self.enable_mutations and self.sample_is_terminal[idx]
         need_modify = self.enable_dropout or need_mutations
         if need_modify:
@@ -177,7 +185,7 @@ class GeneticDataset(Dataset):
                 tmrca_years = self.sample_tmrca_years[idx]
                 generations = tmrca_years / 30.0
                 lambdas = self.mutation_rates_array[valid_indices] * generations
-                mutations = np.random.poisson(lambdas)
+                mutations = self.rng.poisson(lambdas)
                 active_mask = mutations > 0
                 if np.any(active_mask):
                     mut_indices = valid_indices[active_mask]
@@ -185,26 +193,26 @@ class GeneticDataset(Dataset):
                     all_mut_steps_indices = np.repeat(mut_indices, mut_counts)
                     base_pairs = len(all_mut_steps_indices) // 2
                     if base_pairs >= 2:
-                        pair_delta = int(np.round(np.random.normal(loc=0.0, scale=1.0)))
+                        pair_delta = int(np.round(self.rng.normal(loc=0.0, scale=1.0)))
                         final_pairs = max(1, base_pairs + pair_delta)
                         target_len = final_pairs * 2
                         current_len = len(all_mut_steps_indices)
                         if current_len < target_len:
-                            extra_indices = np.random.choice(valid_indices, size=(target_len - current_len),
-                                                             replace=True)
+                            extra_indices = self.rng.choice(valid_indices, size=(target_len - current_len),
+                                                            replace=True)
                             all_mut_steps_indices = np.append(all_mut_steps_indices, extra_indices)
                         elif current_len > target_len:
                             p_rates = self.mutation_rates_array[valid_indices]
                             p_norm = p_rates / np.sum(p_rates)
-                            all_mut_steps_indices = np.random.choice(valid_indices, size=target_len, replace=True,
-                                                                     p=p_norm)
+                            all_mut_steps_indices = self.rng.choice(valid_indices, size=target_len, replace=True,
+                                                                    p=p_norm)
                     else:
                         if len(all_mut_steps_indices) % 2 != 0:
                             rates = self.mutation_rates_array[valid_indices]
                             p_norm = rates / np.sum(rates)
-                            extra_fake_idx = np.random.choice(valid_indices, p=p_norm)
+                            extra_fake_idx = self.rng.choice(valid_indices, p=p_norm)
                             all_mut_steps_indices = np.append(all_mut_steps_indices, extra_fake_idx)
-                    np.random.shuffle(all_mut_steps_indices)
+                    self.rng.shuffle(all_mut_steps_indices)
                     half = len(all_mut_steps_indices) // 2
                     plus_indices = all_mut_steps_indices[:half]
                     minus_indices = all_mut_steps_indices[half: half * 2]
@@ -228,7 +236,7 @@ class GeneticDataset(Dataset):
                         np.clip(feat, a_min=2.0, a_max=float(config.MAX_ALLELE - 1)), feat)
         if self.enable_dropout:
             keep_ratio = self.assigned_lengths[idx]
-            dropout_mask = (np.random.rand(self.num_features) < keep_ratio).astype(np.float32)
+            dropout_mask = (self.rng.random(self.num_features) < keep_ratio).astype(np.float32)
             mask = mask * dropout_mask
             feat = feat * mask
         inputs = np.hstack([feat, mask])
