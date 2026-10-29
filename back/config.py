@@ -13,8 +13,10 @@ EMBEDDING_DIM = 16
 MAX_ALLELE = 50
 TRAIN_THRESHOLD = 0.5
 
-IS_LOW_MEMORY = False
-IS_TRAIN_METRICS = False
+ENABLE_TRAIN_METRICS = False
+
+IS_LOW_RAM = False
+IS_MIN_SAMPLES = False
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
