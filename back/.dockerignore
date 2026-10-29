@@ -3,3 +3,5 @@ real_haplotypes2.csv
 real_haplotypes3.csv
 astronomical_dates_tree.json
 topology_tree.json
+./models/snp_ages.json
+./models/snp_depth_years.json
