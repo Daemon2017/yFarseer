@@ -186,8 +186,9 @@ def split_dataset(df, topology, random_state=42):
     df_singles = df_terminal_all[df_terminal_all['Haplogroup'].isin(counts[counts == 1].index)]
     df_multiples = df_terminal_all[df_terminal_all['Haplogroup'].isin(counts[counts > 1].index)]
     df_multiples_shuffled = df_multiples.sample(frac=1, random_state=random_state)
-    if config.IS_MIN_SAMPLES:
+    if config.IS_INTERMEDIATE_DISABLED:
         df_intermediate = pd.DataFrame(columns=df.columns)
+    if config.IS_MIN_SAMPLES:
         df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'], keep='first')
         df_remaining = df_multiples_shuffled[~df_multiples_shuffled.index.isin(df_val.index)]
         df_train_multi = df_remaining.drop_duplicates(subset=['Haplogroup'], keep='first')
