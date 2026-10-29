@@ -102,11 +102,11 @@ if __name__ == '__main__':
             batch_size = inputs.size(0)
             train_loss += loss.item() * batch_size
             total_train_samples += batch_size
-            if config.ENABLE_TRAIN_METRICS:
+            if config.IS_TRAIN_METRICS_ENABLED:
                 utils.accumulate_metrics_from_batch(outputs=outputs, targets=targets, masks=masks, stats=train_stats,
                                                     criterion=criterion)
         train_loss /= total_train_samples
-        if config.ENABLE_TRAIN_METRICS:
+        if config.IS_TRAIN_METRICS_ENABLED:
             train_count = train_stats["count"] + 1e-8
             train_emr = train_stats["exact"] / train_count
             train_f1 = train_stats["total_f1"] / train_count
