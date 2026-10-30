@@ -3,7 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>yFarseer</title>
+    <title>yFarseer — Предсказание субкладов Y-SNP по маркерам Y-STR</title>
+    <meta name="description" content="Бесплатный биоинформатический онлайн-инструмент yFarseer для точного предсказания Y-SNP гаплогрупп по Y-STR маркерам тестов FTDNA, Yfiler, Генопоиск.">
+    <meta property="og:title" content="yFarseer — Нейросетевой предиктор субкладов Y-ДНК">
+    <meta property="og:description" content="Точное предсказание Y-SNP на основе гаплотипов Y-STR с использованием глубоких нейросетей на PyTorch.">
+    <meta property="og:type" content="website">
     <link rel="stylesheet" href="css/style.css">
     <script src="js/variables.js" defer></script>
     <script src="js/api.js" defer></script>
@@ -28,7 +32,7 @@
     </header>
     <div class="top-panel">
         <section class="card left-input">
-            <h2>Raw data</h2>
+            <h2>Сырые данные / Raw data</h2>
             <div class="content-area">
                 <label for="raw-haplotype" class="visually-hidden">Enter raw haplotype data</label>
                 <textarea id="raw-haplotype"
@@ -37,7 +41,7 @@
             <button id="parse-btn" type="button">Parse <span aria-hidden="true">➔</span></button>
         </section>
         <section class="card right-output">
-            <h2>Table data</h2>
+            <h2>Табличные данные / Table data</h2>
             <div class="markers-grid" id="markers-container">
             </div>
             <div class="select-group">
@@ -58,10 +62,54 @@
         </section>
     </div>
     <section class="card tree-container">
-        <h2>Topology</h2>
+        <h2>Топология / Topology</h2>
         <div id="tree-result">
             <p class="placeholder-text">Press "Predict" to get topology.</p>
         </div>
+    </section>
+    <section id="about-project-ru" class="about-section">
+      <h2>О проекте yFarseer</h2>
+      <p>
+        <strong>yFarseer</strong> — это бесплатный биоинформатический онлайн-инструмент,
+        разработанный для точного <strong>предсказания субкладов Y-SNP на основе гаплотипов Y-STR</strong>.
+      </p>
+      <p>
+        В основе сервиса лежит глубокая нейросеть (двухслойный MLP с эмбеддингами маркеров на PyTorch),
+        обученная с применением иерархического скоринга и кастомной функции потерь <code>MaskedBCELoss</code>.
+        Модель учитывает филогенетическое дерево мутаций и оценивает топологию с заданным уровнем доверия (Confidence).
+      </p>
+      <h3>Основные возможности:</h3>
+      <ul class="features-list">
+        <li>Поддержка до 111 стандартных маркеров Y-STR (от DYS393 до DYS435).</li>
+        <li>
+          <strong>Полная совместимость с популярными панелями:</strong>
+          FTDNA (Y12, Y25, Y37, Y67, Y111, BigY-500, BigY-700), Yfiler (Y17/Y27), PowerPlex (Y23), Генопоиск (Y50/Y67) и другими стандартными форматами тестов.
+        </li>
+        <li>Автоматический парсинг сырых данных (Raw haplotype data) из форматов CSV, TSV или обычного скопированного текста.</li>
+        <li>Разделение маркеров по стандартным панелям (Panel 1–5), включая мультикопийные маркеры (DYS385, DYS459, YCAII, CDY, DYF395S1, DYS413, DYS464).</li>
+        <li>Построение интерактивной цепочки иерархической топологии субкладов.</li>
+      </ul>
+    </section>
+    <section id="about-project-en" class="about-section">
+        <h2>About yFarseer</h2>
+        <p>
+          <strong>yFarseer</strong> is a free bioinformatics web tool designed for accurate
+          <strong>Y-SNP subclade prediction from Y-STR markers</strong>.
+        </p>
+        <p>
+          Powered by a deep neural network (PyTorch MLP with marker embeddings), the predictor utilizes a custom hierarchical <code>MaskedBCELoss</code> that accounts for the phylogenetic mutation tree structure, estimating subclade topology at various confidence levels.
+        </p>
+
+        <h3>Key Features:</h3>
+        <ul>
+          <li>Supports up to 111 standard Y-STR markers (from DYS393 to DYS435).</li>
+          <li>
+            <strong>Broad compatibility with commercial & forensic panels:</strong> FTDNA (Y12, Y25, Y37, Y67, Y111, BigY-500, BigY-700), Yfiler (Y17/Y27), PowerPlex (Y23), Genopoisk (Y50/Y67), and more.
+          </li>
+          <li>Parses raw haplotype text data (CSV, TSV, or space-separated tokens).</li>
+          <li>Handles multi-copy markers (DYS385, DYS459, YCAII, CDY, DYF395S1, DYS413, DYS464) grouped by panels 1 to 5.</li>
+          <li>Generates an interactive, step-by-step downstream Y-SNP haplogroup chain.</li>
+        </ul>
     </section>
 </main>
 </body>
