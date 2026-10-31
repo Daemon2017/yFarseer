@@ -189,9 +189,30 @@ def split_dataset(df, topology, random_state=42):
     if config.IS_INTERMEDIATE_SNPS_DISABLED:
         df_intermediate = pd.DataFrame(columns=df.columns)
     if config.IS_MIN_SAMPLES:
-        df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'], keep='first')
-        df_remaining = df_multiples_shuffled[~df_multiples_shuffled.index.isin(df_val.index)]
-        df_train_multi = df_remaining.drop_duplicates(subset=['Haplogroup'], keep='first')
+        feats_np, _ = build_matrices(df_multiples_shuffled)
+        base_rates = [config.STR_MUTATION_RATES.get(col, 0.002) for col in config.EXTENDED_STR_COLS]
+        mutation_rates = np.array(base_rates, dtype=np.float32)
+        marker_weights = np.log(1.0 / (mutation_rates + 1e-5))
+        marker_weights = marker_weights / np.mean(marker_weights)
+        scaled_feats = feats_np * np.sqrt(marker_weights)
+        train_indices = []
+        val_indices = []
+        grouped = df_multiples_shuffled.groupby('Haplogroup').groups
+        for hg, idx_list in grouped.items():
+            pos_list = [df_multiples_shuffled.index.get_loc(idx) for idx in idx_list]
+            group_feats = scaled_feats[pos_list]
+            norms = np.sum(group_feats ** 2, axis=1)
+            dist_matrix = norms[:, None] + norms[None, :] - 2 * np.dot(group_feats, group_feats.T)
+            dist_matrix = np.sqrt(np.clip(dist_matrix, a_min=0.0, a_max=None))
+            idx_a, idx_b = np.unravel_index(np.argmax(dist_matrix), dist_matrix.shape)
+            train_idx_1 = idx_list[idx_a]
+            train_idx_2 = idx_list[idx_b]
+            train_indices.extend([train_idx_1, train_idx_2])
+            remaining_idxs = [idx for idx in idx_list if idx not in (train_idx_1, train_idx_2)]
+            if remaining_idxs:
+                val_indices.append(remaining_idxs[0])
+        df_train_multi = df_multiples_shuffled.loc[train_indices]
+        df_val = df_multiples_shuffled.loc[val_indices]
     else:
         df_val = df_multiples_shuffled.drop_duplicates(subset=['Haplogroup'])
         df_train_multi = df_multiples[~df_multiples.index.isin(df_val.index)]
