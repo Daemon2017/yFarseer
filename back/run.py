@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import traceback
 
 import numpy as np
@@ -134,18 +133,10 @@ def predict_snp():
     try:
         threshold_param = req_json['confidence']
         haplotype_input = req_json['haplotype']
-        if isinstance(haplotype_input, str):
-            vals = [v.strip() for v in re.split(r'[\s,;\t]+', haplotype_input.strip()) if v.strip()]
-            sample_dict = {}
-            for i, col in enumerate(config.BASE_STR_COLS):
-                if i < len(vals):
-                    sample_dict[col] = vals[i]
-                else:
-                    sample_dict[col] = None
-        elif isinstance(haplotype_input, dict):
+        if isinstance(haplotype_input, dict):
             sample_dict = haplotype_input
         else:
-            return jsonify({'status': 'error', 'message': 'Формат гаплотипа должен быть строкой или объектом'}), 400
+            return jsonify({'status': 'error', 'message': 'Формат гаплотипа должен быть JSON'}), 400
         features, masks = process_sample_dict(sample_dict)
         inputs = np.hstack([features.astype(np.float32), masks.astype(np.float32)])
         inputs_tensor = torch.tensor(inputs, dtype=torch.float32).to(config.DEVICE)
