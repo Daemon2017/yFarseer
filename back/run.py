@@ -19,35 +19,8 @@ CORS(app)
 predictor = None
 
 
-def compute_hierarchical_probs_inference(logits, parent_indices):
-    output_dim = len(parent_indices)
+def compute_hierarchical_probs_inference(logits, ancestry_matrix, brother_matrix, single_child_mask):
     eps = 1e-7
-    row_indices, col_indices = [], []
-    for i in range(output_dim):
-        curr = parent_indices[i]
-        while curr != -1:
-            row_indices.append(i)
-            col_indices.append(curr)
-            curr = parent_indices[curr]
-    indices = torch.tensor([row_indices, col_indices], dtype=torch.long, device=logits.device)
-    values = torch.ones(len(row_indices), dtype=torch.float32, device=logits.device)
-    ancestry_matrix = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
-    parent_to_children = {}
-    for child_idx, parent_idx in enumerate(parent_indices):
-        parent_to_children.setdefault(parent_idx, []).append(child_idx)
-    single_child_mask = torch.zeros(output_dim, dtype=torch.bool, device=logits.device)
-    b_rows, b_cols = [], []
-    for children in parent_to_children.values():
-        if len(children) == 1:
-            single_child_mask[children] = True
-        else:
-            for c1 in children:
-                for c2 in children:
-                    b_rows.append(c1)
-                    b_cols.append(c2)
-    b_indices = torch.tensor([b_rows, b_cols], dtype=torch.long, device=logits.device)
-    b_values = torch.ones(len(b_rows), dtype=torch.float32, device=logits.device)
-    brother_matrix = torch.sparse_coo_tensor(b_indices, b_values, (output_dim, output_dim))
     sig_probs = torch.sigmoid(logits)
     exp_logits = torch.exp(torch.clamp(logits, max=12.0))
     brother_sums = torch.sparse.mm(brother_matrix, exp_logits.t()).t()
@@ -60,23 +33,14 @@ def compute_hierarchical_probs_inference(logits, parent_indices):
     return p_h
 
 
-def hierarchical_predict(model, x, parent_indices, threshold):
+def hierarchical_predict(model, x, parent_indices, computed_levels, max_level, ancestry_matrix, brother_matrix,
+                         single_child_mask, threshold):
     model.eval()
     with torch.no_grad():
         logits = model(x)
-        probs = compute_hierarchical_probs_inference(logits, parent_indices)
+        probs = compute_hierarchical_probs_inference(logits, ancestry_matrix, brother_matrix, single_child_mask)
         batch_size = probs.size(0)
         final_active_mask = torch.zeros_like(probs, dtype=torch.bool)
-        num_snps = len(parent_indices)
-        computed_levels = [0] * num_snps
-        for i in range(num_snps):
-            path_len = 0
-            curr = parent_indices[i]
-            while curr != -1:
-                path_len += 1
-                curr = parent_indices[curr]
-            computed_levels[i] = path_len
-        max_level = max(computed_levels) if computed_levels else 0
         root_indices = [idx for idx, p_idx in enumerate(parent_indices) if p_idx == -1]
         if root_indices:
             for b in range(batch_size):
@@ -115,7 +79,7 @@ def hierarchical_predict(model, x, parent_indices, threshold):
                         if sib_probs[max_idx] >= threshold:
                             final_active_mask[b, best_sib_idx] = True
         probs = torch.where(final_active_mask, probs, torch.tensor(0.0, device=probs.device))
-    return probs, computed_levels
+    return probs
 
 
 class GeneticSingleModel:
@@ -123,6 +87,11 @@ class GeneticSingleModel:
         self.model = None
         self.sorted_snps = []
         self.parent_indices = []
+        self.computed_levels = []
+        self.max_level = 0
+        self.ancestry_matrix = None
+        self.brother_matrix = None
+        self.single_child_mask = None
         self.num_str_markers = len(config.EXTENDED_STR_COLS)
         self.max_allele_val = config.MAX_ALLELE
         self.embedding_dim = config.EMBEDDING_DIM
@@ -133,12 +102,50 @@ class GeneticSingleModel:
         with open(os.path.join(config.MODEL_DIR, "parent_indices.json"), "r", encoding="utf-8") as f:
             self.parent_indices = json.load(f)
         output_dim = len(self.sorted_snps)
+        print("Precalculating...")
+        device = torch.device(config.DEVICE)
+        self.computed_levels = [0] * output_dim
+        for i in range(output_dim):
+            path_len = 0
+            curr = self.parent_indices[i]
+            while curr != -1:
+                path_len += 1
+                curr = self.parent_indices[curr]
+            self.computed_levels[i] = path_len
+        self.max_level = max(self.computed_levels) if self.computed_levels else 0
+        row_indices, col_indices = [], []
+        for i in range(output_dim):
+            curr = self.parent_indices[i]
+            while curr != -1:
+                row_indices.append(i)
+                col_indices.append(curr)
+                curr = self.parent_indices[curr]
+        indices = torch.tensor([row_indices, col_indices], dtype=torch.long, device=device)
+        values = torch.ones(len(row_indices), dtype=torch.float32, device=device)
+        self.ancestry_matrix = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim)).coalesce()
+        parent_to_children = {}
+        for child_idx, parent_idx in enumerate(self.parent_indices):
+            parent_to_children.setdefault(parent_idx, []).append(child_idx)
+        self.single_child_mask = torch.zeros(output_dim, dtype=torch.bool, device=device)
+        b_rows, b_cols = [], []
+        for children in parent_to_children.values():
+            if len(children) == 1:
+                self.single_child_mask[children] = True
+            else:
+                for c1 in children:
+                    for c2 in children:
+                        b_rows.append(c1)
+                        b_cols.append(c2)
+        b_indices = torch.tensor([b_rows, b_cols], dtype=torch.long, device=device)
+        b_values = torch.ones(len(b_rows), dtype=torch.float32, device=device)
+        self.brother_matrix = torch.sparse_coo_tensor(b_indices, b_values, (output_dim, output_dim)).coalesce()
         model_path = os.path.join(config.MODEL_DIR, "model_best.pth")
         if os.path.exists(model_path):
             self.model = classes.GeneticEmbeddingMLP(self.num_str_markers, self.max_allele_val, self.embedding_dim,
                                                      output_dim, snp_depth_years=None)
+            print("Loading model...")
             self.model.load_state_dict(torch.load(model_path, map_location=config.DEVICE))
-            self.model.to(config.DEVICE)
+            self.model.to(device)
             self.model.eval()
 
 
@@ -179,11 +186,12 @@ def predict_snp():
         features, masks = process_sample_dict(haplotype_input)
         inputs = np.hstack([features.astype(np.float32), masks.astype(np.float32)])
         inputs_tensor = torch.tensor(inputs, dtype=torch.float32).to(config.DEVICE)
-        probs, computed_levels = hierarchical_predict(predictor.model, inputs_tensor, predictor.parent_indices,
-                                                      threshold_param)
+        probs = hierarchical_predict(predictor.model, inputs_tensor, predictor.parent_indices,
+                                     predictor.computed_levels, predictor.max_level, predictor.ancestry_matrix,
+                                     predictor.brother_matrix, predictor.single_child_mask, threshold_param)
         probs = probs.cpu().numpy()[0]
         active_indices = [idx for idx, p in enumerate(probs) if p >= threshold_param]
-        active_indices.sort(key=lambda idx: computed_levels[idx])
+        active_indices.sort(key=lambda idx: predictor.computed_levels[idx])
         chain_results = [(predictor.sorted_snps[idx], float(probs[idx])) for idx in active_indices]
         tree_structure = build_recursive_tree(chain_results)
         return jsonify(tree_structure)
