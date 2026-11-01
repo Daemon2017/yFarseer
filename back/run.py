@@ -19,13 +19,64 @@ CORS(app)
 predictor = None
 
 
+def compute_hierarchical_probs_inference(logits, parent_indices):
+    output_dim = len(parent_indices)
+    eps = 1e-7
+    row_indices, col_indices = [], []
+    for i in range(output_dim):
+        curr = parent_indices[i]
+        while curr != -1:
+            row_indices.append(i)
+            col_indices.append(curr)
+            curr = parent_indices[curr]
+    indices = torch.tensor([row_indices, col_indices], dtype=torch.long, device=logits.device)
+    values = torch.ones(len(row_indices), dtype=torch.float32, device=logits.device)
+    ancestry_matrix = torch.sparse_coo_tensor(indices, values, (output_dim, output_dim))
+    parent_to_children = {}
+    for child_idx, parent_idx in enumerate(parent_indices):
+        parent_to_children.setdefault(parent_idx, []).append(child_idx)
+    single_child_mask = torch.zeros(output_dim, dtype=torch.bool, device=logits.device)
+    b_rows, b_cols = [], []
+    for children in parent_to_children.values():
+        if len(children) == 1:
+            single_child_mask[children] = True
+        else:
+            for c1 in children:
+                for c2 in children:
+                    b_rows.append(c1)
+                    b_cols.append(c2)
+    b_indices = torch.tensor([b_rows, b_cols], dtype=torch.long, device=logits.device)
+    b_values = torch.ones(len(b_rows), dtype=torch.float32, device=logits.device)
+    brother_matrix = torch.sparse_coo_tensor(b_indices, b_values, (output_dim, output_dim))
+    sig_probs = torch.sigmoid(logits)
+    exp_logits = torch.exp(torch.clamp(logits, max=12.0))
+    brother_sums = torch.sparse.mm(brother_matrix, exp_logits.t()).t()
+    softmax_probs = exp_logits / (1.0 + brother_sums + eps)
+    cond_probs = torch.where(single_child_mask.unsqueeze(0), sig_probs, softmax_probs)
+    cond_probs = torch.clamp(cond_probs, min=eps, max=1.0)
+    log_cond_probs = torch.log(cond_probs)
+    hierarchical_log_probs = log_cond_probs + torch.sparse.mm(ancestry_matrix, log_cond_probs.t()).t()
+    p_h = torch.clamp(torch.exp(hierarchical_log_probs), min=eps, max=1.0 - eps)
+    return p_h
+
+
 def hierarchical_predict(model, x, parent_indices, threshold):
     model.eval()
     with torch.no_grad():
         logits = model(x)
-        probs = torch.sigmoid(logits)
+        probs = compute_hierarchical_probs_inference(logits, parent_indices)
         batch_size = probs.size(0)
         final_active_mask = torch.zeros_like(probs, dtype=torch.bool)
+        num_snps = len(parent_indices)
+        computed_levels = [0] * num_snps
+        for i in range(num_snps):
+            path_len = 0
+            curr = parent_indices[i]
+            while curr != -1:
+                path_len += 1
+                curr = parent_indices[curr]
+            computed_levels[i] = path_len
+        max_level = max(computed_levels) if computed_levels else 0
         root_indices = [idx for idx, p_idx in enumerate(parent_indices) if p_idx == -1]
         if root_indices:
             for b in range(batch_size):
@@ -39,23 +90,13 @@ def hierarchical_predict(model, x, parent_indices, threshold):
                     best_root_idx = root_indices[max_idx]
                     if root_probs[max_idx] >= threshold:
                         final_active_mask[b, best_root_idx] = True
-        num_snps = len(parent_indices)
-        computed_levels = [0] * num_snps
-        for i in range(num_snps):
-            path_len = 0
-            curr = parent_indices[i]
-            while curr != -1:
-                path_len += 1
-                curr = parent_indices[curr]
-            computed_levels[i] = path_len
-        max_level = max(computed_levels) if computed_levels else 0
         for lvl in range(1, max_level + 1):
             lvl_indices = [idx for idx, l in enumerate(computed_levels) if l == lvl]
             if not lvl_indices:
                 continue
             for b in range(batch_size):
-                b_lvl_indices = [idx for idx in lvl_indices if
-                                 parent_indices[idx] != -1 and final_active_mask[b, parent_indices[idx]]]
+                b_lvl_indices = [idx for idx in lvl_indices if parent_indices[idx] != -1
+                                 and final_active_mask[b, parent_indices[idx]]]
                 if not b_lvl_indices:
                     continue
                 parents_groups = {}
