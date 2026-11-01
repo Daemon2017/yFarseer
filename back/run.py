@@ -133,11 +133,9 @@ def predict_snp():
     try:
         threshold_param = req_json['confidence']
         haplotype_input = req_json['haplotype']
-        if isinstance(haplotype_input, dict):
-            sample_dict = haplotype_input
-        else:
+        if not isinstance(haplotype_input, dict):
             return jsonify({'status': 'error', 'message': 'Формат гаплотипа должен быть JSON'}), 400
-        features, masks = process_sample_dict(sample_dict)
+        features, masks = process_sample_dict(haplotype_input)
         inputs = np.hstack([features.astype(np.float32), masks.astype(np.float32)])
         inputs_tensor = torch.tensor(inputs, dtype=torch.float32).to(config.DEVICE)
         probs, computed_levels = hierarchical_predict(predictor.model, inputs_tensor, predictor.parent_indices,
