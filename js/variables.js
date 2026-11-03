@@ -24,7 +24,7 @@ const CONFIG = {
 const PANEL_BOUNDARIES = {
   0: "Panel 1 (1–12)",
   11: "Panel 2 (13–25)",
-  23: "Panel 3 (26–37)",
-  34: "Panel 4 (38–67)",
-  61: "Panel 5 (68–111)"
+  20: "Panel 3 (26–37)",
+  30: "Panel 4 (38–67)",
+  58: "Panel 5 (68–111)"
 };
